@@ -1,0 +1,76 @@
+:root {
+    /* COLOR PALETTE - COMMAND CENTER THEME (Dark Mode Default) */
+    --bg-app: #0f1115;
+    --bg-sidebar: #161b22;
+    --bg-card: #1c2128;
+    --bg-input: #0d1117;
+
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #484f58;
+
+    --accent-primary: #238636;
+    --accent-hover: #2ea043;
+    --accent-blue: #58a6ff;
+    --accent-purple: #bc8cff;
+    --accent-red: #da3633;
+    --accent-orange: #d29922;
+
+    --border-color: #30363d;
+
+    /* SPACING */
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 16px;
+    --space-lg: 24px;
+    --space-xl: 32px;
+
+    /* TYPOGRAPHY */
+    --font-heading: 'Space Grotesk', sans-serif;
+    --font-body: 'Inter', sans-serif;
+
+    /* UTILS */
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.2);
+
+    /* AUTH THEME */
+    --bg-auth: radial-gradient(circle at center, #1c2128 0%, #0f1115 100%);
+    --text-brand-gradient-start: #fff;
+    --text-brand-gradient-end: #8b949e;
+}
+
+.mb-2 {
+    margin-bottom: 8px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: var(--font-body);
+}
+
+body {
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    line-height: 1.5;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* Light Mode Override */
+:root[data-theme="light"] {
+    --bg-app: #f4f6f8;
+    --bg-sidebar: #ffffff;
+    --bg-card: #ffffff;
+    --bg-input: #f0f2f5;
+    --text-primary: #1a1a1a;
+    --text-secondary: #65676b;
+    --border-color: #e4e6eb;
+
+    --bg-auth: #f4f6f8;
+    --text-brand-gradient-start: #1a1a1a;
+    --text-brand-gradient-end: #555;
+}
