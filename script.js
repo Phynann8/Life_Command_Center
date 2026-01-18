@@ -1,1214 +1,723 @@
-// FIREBASE CONFIGURATION
-const firebaseConfig = {
-    apiKey: "AIzaSyDBS9rEkJPMx3eAd9TmwTwjlfGgu_lRBGE",
-    authDomain: "it-asset-system-2091b.firebaseapp.com",
-    projectId: "it-asset-system-2091b",
-    storageBucket: "it-asset-system-2091b.firebasestorage.app",
-    messagingSenderId: "788162777362",
-    appId: "1:788162777362:web:29481f4c345dae382063cb",
-    measurementId: "G-VNHV6QEDWP"
+// ==========================================
+// CONFIGURATIONS & UTILS
+// ==========================================
+const Config = {
+    firebase: {
+        apiKey: "AIzaSyB9IQEjLgnUoGh3-cJZ03pi249aG5_kKlI",
+        authDomain: "life-command-center.firebaseapp.com",
+        projectId: "life-command-center",
+        storageBucket: "life-command-center.firebasestorage.app",
+        messagingSenderId: "947642257927",
+        appId: "1:947642257927:web:ee8a236024e7ad53ed90a2",
+        measurementId: "G-V1G70237X7"
+    }
 };
 
-// INITIALIZE FIREBASE
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
+
+const Utils = {
+    isToday: (date) => {
+        const today = new Date();
+        // specific check for valid date objects from utils.js
+        if (!(date instanceof Date) && typeof date !== 'string' && typeof date !== 'number') return false;
+        const d = new Date(date);
+        if (isNaN(d.getTime())) return false;
+
+        return d.getDate() === today.getDate() &&
+            d.getMonth() === today.getMonth() &&
+            d.getFullYear() === today.getFullYear();
+    },
+    formatTime: (date) => {
+        return new Date(date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+};
+
+// Initialize Firebase
+if (!firebase.apps.length) {
+    firebase.initializeApp(Config.firebase);
+}
 const db = firebase.firestore();
+const auth = firebase.auth();
 
-// STATE MANAGEMENT
-let currentUser = null;
-let currentTasks = [];
-
-/* ============================
-   AUTH HANDLING
-   ============================ */
-
-auth.onAuthStateChanged(user => {
-    if (user) {
-        // User logged in
-        currentUser = user;
-        document.getElementById('authContainer').style.display = 'none';
-        document.getElementById('appContainer').style.display = 'flex';
-
-        // Update Sidebar info
-        document.getElementById('userName').textContent = user.displayName || user.email.split('@')[0];
-        document.getElementById('userAvatar').textContent = (user.displayName || user.email)[0].toUpperCase();
-
-        // Load Data
-        loadData();
-    } else {
-        // User logged out
-        currentUser = null;
-        document.getElementById('authContainer').style.display = 'flex';
-        document.getElementById('appContainer').style.display = 'none';
+// ==========================================
+// DATA MODULES
+// ==========================================
+const Data = {
+    Tasks: {
+        fetch: async (userId) => {
+            const snap = await db.collection('tasks').where('userId', '==', userId).orderBy('createdAt', 'desc').get();
+            return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        },
+        add: async (userId, task) => {
+            return db.collection('tasks').add({ userId, ...task, createdAt: new Date().toISOString() });
+        },
+        update: async (id, data) => db.collection('tasks').doc(id).update(data),
+        delete: async (id) => db.collection('tasks').doc(id).delete()
+    },
+    Projects: {
+        fetch: async (userId) => {
+            const snap = await db.collection('projects').where('userId', '==', userId).orderBy('createdAt', 'desc').get();
+            return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        },
+        add: async (userId, data) => {
+            return db.collection('projects').add({ userId, ...data, createdAt: new Date().toISOString() });
+        },
+        delete: async (id) => db.collection('projects').doc(id).delete()
     }
-});
+};
 
-function switchAuthTab(tab) {
-    document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
-
-    // Select specific tab button (simple logic for MVP)
-    const buttons = document.querySelectorAll('.auth-tab');
-    if (tab === 'login') buttons[0].classList.add('active');
-    else buttons[1].classList.add('active');
-
-    document.getElementById(`${tab}Form`).classList.add('active');
-}
-
-// LOGIN
-document.getElementById('loginForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email = document.getElementById('loginEmail').value;
-    const password = document.getElementById('loginPassword').value;
-    const msg = document.getElementById('authMessage');
-
-    try {
-        await auth.signInWithEmailAndPassword(email, password);
-        msg.textContent = '';
-    } catch (error) {
-        msg.textContent = error.message;
-        msg.className = 'auth-message error';
-    }
-});
-
-// SIGNUP
-document.getElementById('signupForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email = document.getElementById('signupEmail').value;
-    const password = document.getElementById('signupPassword').value;
-    const name = document.getElementById('signupName').value;
-    const msg = document.getElementById('authMessage');
-
-    try {
-        const result = await auth.createUserWithEmailAndPassword(email, password);
-        // Update display name
-        await result.user.updateProfile({ displayName: name });
-        // Create user document inside 'users' collection for syncing other data easily later
-        await db.collection('users').doc(result.user.uid).set({
-            name: name,
-            email: email,
-            createdAt: new Date().toISOString()
+const Schedule = {
+    generateSlots: () => {
+        const slots = [];
+        for (let i = 6; i < 24; i++) slots.push(`${i.toString().padStart(2, '0')}:00`);
+        return slots;
+    },
+    getTaskForSlot: (tasks, slot) => {
+        // Simple slot check: is the slot >= start and < end?
+        return tasks.find(t => {
+            if (!t.timeBlock) return false;
+            // Compare HH:MM strings
+            return slot >= t.timeBlock.start && slot < t.timeBlock.end;
         });
+    },
+    checkConflict: (tasks, newStart, newEnd) => {
+        return tasks.some(task => {
+            if (!task.timeBlock) return false;
+            if (task.status === 'completed') return false; // Optional: ignore completed tasks (?) - keeping simple for now
 
-        msg.textContent = '';
-    } catch (error) {
-        msg.textContent = error.message;
-        msg.className = 'auth-message error';
+            const taskStart = task.timeBlock.start;
+            const taskEnd = task.timeBlock.end;
+
+            // Overlap logic from js/modules/schedule.js
+            return (newStart < taskEnd && newEnd > taskStart);
+        });
     }
-});
+};
 
-function handleLogout() {
-    auth.signOut();
-}
-
-/* ============================
-   UI & NAVIGATION
-   ============================ */
-
-function showModule(moduleName) {
-    // Hide all modules
-    document.querySelectorAll('.module').forEach(m => m.classList.remove('active'));
-    // Show selected
-    document.getElementById(`${moduleName}Module`).classList.add('active');
-
-    // Update Sidebar
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-
-    // Finding button by onclick attribute for MVP speed
-    const navButtons = Array.from(document.querySelectorAll('.nav-item'));
-    const btn = navButtons.find(b => b.getAttribute('onclick').includes(moduleName));
-    if (btn) btn.classList.add('active');
-
-    // Update Title
-    document.getElementById('pageTitle').textContent =
-        moduleName.charAt(0).toUpperCase() + moduleName.slice(1);
-
-    // Special handling for projects module placeholder
-    if (moduleName === 'projects' && document.getElementById('dashboardProjectList')) {
-        updateProjectPlaceholder();
+// ==========================================
+// AUTH MODULE
+// ==========================================
+const Auth = {
+    init: (onLogin, onLogout) => {
+        auth.onAuthStateChanged(user => user ? onLogin(user) : onLogout());
+    },
+    login: async (email, password) => {
+        try {
+            await auth.signInWithEmailAndPassword(email, password);
+            return { success: true };
+        } catch (e) { return { success: false, error: e.message }; }
+    },
+    signup: async (email, password, name) => {
+        try {
+            const res = await auth.createUserWithEmailAndPassword(email, password);
+            await res.user.updateProfile({ displayName: name });
+            await db.collection('users').doc(res.user.uid).set({
+                name, email, createdAt: new Date().toISOString()
+            });
+            return { success: true };
+        } catch (e) { return { success: false, error: e.message }; }
+    },
+    logout: () => auth.signOut(),
+    guestLogin: async () => {
+        return { success: true, user: { uid: 'guest123', displayName: 'Guest User', email: 'guest@local.test' } };
+    },
+    updateProfile: async (name) => {
+        try {
+            const user = auth.currentUser;
+            if (user) {
+                await user.updateProfile({ displayName: name });
+                // Also update in Firestore users collection
+                await db.collection('users').doc(user.uid).update({ name: name });
+                return { success: true };
+            } else {
+                return { success: false, error: 'No user signed in' };
+            }
+        } catch (e) { return { success: false, error: e.message }; }
     }
-}
+};
 
-/* ============================
-   DATA HANDLING
-   ============================ */
+// ==========================================
+// UI MODULE
+// ==========================================
+const UI = {
+    startClock: () => {
+        const update = () => {
+            const now = new Date();
+            // Time: 09:30:34 AM
+            const timeString = now.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true
+            });
 
-async function loadData() {
-    loadTasks();
-    // loadProjects();
-    // loadGoals();
-}
+            // Date: 12-Jan-26
+            const dateString = now.toLocaleDateString('en-GB', {
+                day: '2-digit',
+                month: 'short',
+                year: '2-digit'
+            }).replace(/ /g, '-');
 
-// LOAD TASKS
-async function loadTasks() {
-    if (!currentUser) return;
+            const dateEl = document.getElementById('systemDate');
+            const timeEl = document.getElementById('systemTime');
 
-    const snapshot = await db.collection('tasks')
-        .where('userId', '==', currentUser.uid)
-        .orderBy('createdAt', 'desc')
-        .get();
+            if (dateEl) dateEl.textContent = dateString;
+            if (timeEl) timeEl.textContent = timeString;
+        };
+        update(); // Initial call
+        setInterval(update, 1000);
+    },
 
-    currentTasks = [];
-    snapshot.forEach(doc => {
-        currentTasks.push({ id: doc.id, ...doc.data() });
-    });
+    toggleTheme: () => {
+        const root = document.documentElement;
+        const current = root.getAttribute('data-theme');
+        const next = current === 'light' ? 'dark' : 'light';
 
-    renderDashboard();
-}
+        if (next === 'light') {
+            root.setAttribute('data-theme', 'light');
+        } else {
+            root.removeAttribute('data-theme'); // Default is dark
+        }
 
-// RENDER DASHBOARD
-function renderDashboard() {
-    const todayDone = currentTasks.filter(t => t.status === 'completed' && isToday(new Date(t.createdAt))).length;
-    const todayPending = currentTasks.filter(t => t.status !== 'completed').length;
+        localStorage.setItem('theme', next);
+        UI.updateThemeIcon(next);
+    },
 
-    document.getElementById('todayDoneCount').textContent = todayDone;
-    document.getElementById('todayPendingCount').textContent = todayPending;
+    updateThemeIcon: (theme) => {
+        const btn = document.getElementById('themeToggleBtn');
+        if (btn) {
+            btn.textContent = theme === 'light' ? '☀️' : '🌙';
+        }
+    },
 
-    // Update Mini Schedule
-    const scheduleContainer = document.getElementById('miniSchedule');
-    if (scheduleContainer) {
-        // Filter tasks that have timeBlocks
-        const scheduledTasks = currentTasks.filter(t => t.timeBlock && t.status !== 'completed')
-            .sort((a, b) => a.timeBlock.start.localeCompare(b.timeBlock.start));
+    /* // --- MOBILE MENU FUNCTIONALITY ---
+    toggleMobileMenu: () => {
+        const nav = document.getElementById('sidebarNav');
+        const toggleBtn = document.querySelector('.mobile-nav-toggle .toggle-icon');
 
-        if (scheduledTasks.length > 0) {
-            scheduleContainer.innerHTML = '';
-            scheduledTasks.slice(0, 3).forEach(task => {
-                scheduleContainer.innerHTML += `
-                    <div class="schedule-item">
-                        <span class="schedule-time">${task.timeBlock.start}</span>
-                        <span class="schedule-title">${task.title}</span>
+        // Check if menu is currently open
+        if (nav.classList.contains('active')) {
+            // Close Menu
+            nav.classList.remove('active');
+            toggleBtn.style.transform = 'rotate(0deg)'; // Reset arrow rotation
+        } else {
+            // Open Menu
+            nav.classList.add('active'); // CSS handles animation
+            toggleBtn.style.transform = 'rotate(180deg)'; // Rotate arrow up
+        }
+    }, */
+
+    showToast: (message, type = 'info') => {
+        let container = document.querySelector('.toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.className = 'toast-container';
+            document.body.appendChild(container);
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.innerHTML = `<span>${message}</span>`;
+
+        container.appendChild(toast);
+
+        // Remove after 3 seconds
+        setTimeout(() => {
+            toast.classList.add('hiding');
+            toast.addEventListener('animationend', () => toast.remove());
+        }, 3000);
+    },
+
+    showModule: (name) => {
+        document.querySelectorAll('.module').forEach(m => m.classList.remove('active'));
+        const target = document.getElementById(`${name}Module`);
+        if (target) target.classList.add('active');
+
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        // Simple logic to find nav button
+        const btn = Array.from(document.querySelectorAll('.nav-item')).find(b =>
+            b.getAttribute('onclick') && b.getAttribute('onclick').includes(name)
+        );
+        if (btn) btn.classList.add('active');
+
+        const title = name.charAt(0).toUpperCase() + name.slice(1);
+        document.getElementById('pageTitle').textContent = title;
+
+        // Mobile: Update Dropdown Title
+        const mobileTitle = document.getElementById('currentMobilePage');
+        if (mobileTitle) mobileTitle.textContent = title;
+
+        // Mobile: Close Menu after selection
+        const nav = document.getElementById('sidebarNav');
+        const toggleBtn = document.querySelector('.mobile-nav-toggle .toggle-icon');
+        if (nav && nav.classList.contains('active')) {
+            nav.classList.remove('active');
+            if (toggleBtn) toggleBtn.style.transform = 'rotate(0deg)';
+        }
+    },
+
+    showModal: (html) => {
+        const container = document.getElementById('modalContainer');
+        container.innerHTML = html;
+        container.classList.add('active');
+    },
+
+    closeModal: () => {
+        document.getElementById('modalContainer').classList.remove('active');
+    },
+
+    renderSchedule: (tasks) => {
+        const container = document.getElementById('scheduleModule');
+        if (!container) return;
+
+        const slots = Schedule.generateSlots();
+        let html = `
+            <div class="module-header">
+                <h2>📅 Daily Schedule</h2>
+                <div class="date-display">${new Date().toLocaleDateString()}</div>
+            </div>
+            <div class="schedule-timeline">
+        `;
+
+        slots.forEach(slot => {
+            const task = Schedule.getTaskForSlot(tasks, slot);
+
+            // Generate content
+            let content = '';
+            let className = 'time-content';
+
+            if (task) {
+                className += ' occupied';
+                content = `
+                    <div class="timeline-task ${task.category}-bg" onclick="App.openEditTask('${task.id}')">
+                        <span class="time">${task.timeBlock.start} - ${task.timeBlock.end}</span>
+                        <span class="title">${task.title}</span>
                     </div>
                 `;
-            });
-        } else {
-            scheduleContainer.innerHTML = '<div class="empty-state">No scheduled tasks for today.</div>';
-        }
-    }
+            } else {
+                content = `<div class="free-slot" onclick="App.openAddTaskModalWithTime('${slot}')">+</div>`;
+            }
 
-    renderTaskList();
-    updateProjectPlaceholder();
-}
-
-// RENDER TASK LIST (Full View)
-function renderTaskList() {
-    const listContainer = document.getElementById('fullTaskList');
-    if (!listContainer) return;
-
-    listContainer.innerHTML = '';
-
-    if (currentTasks.length === 0) {
-        listContainer.innerHTML = '<div class="empty-state">No tasks found. Create one!</div>';
-        return;
-    }
-
-    currentTasks.forEach(task => {
-        const item = document.createElement('div');
-        item.className = `task-item ${task.priority}-priority ${task.status}`;
-        item.innerHTML = `
-            <div class="task-checkbox" onclick="toggleTaskStatus('${task.id}', '${task.status}')">
-                ${task.status === 'completed' ? '✓' : ''}
-            </div>
-            <div class="task-details">
-                <div class="task-title">${task.title}</div>
-                <div class="task-meta">
-                    <span class="badg badge-${task.category}">${task.category}</span>
-                    ${task.timeBlock ? `<span class="time-badge">🕒 ${task.timeBlock.start} - ${task.timeBlock.end}</span>` : ''}
-                </div>
-            </div>
-            <div class="task-actions">
-                <button class="btn-icon" onclick="deleteTask('${task.id}')">🗑️</button>
-            </div>
-        `;
-        listContainer.appendChild(item);
-    });
-}
-
-// UTILS
-function isToday(date) {
-    const today = new Date();
-    return date.getDate() === today.getDate() &&
-        date.getMonth() === today.getMonth() &&
-        date.getFullYear() === today.getFullYear();
-}
-
-function updateClock() {
-    const now = new Date();
-    document.getElementById('systemClock').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-setInterval(updateClock, 1000);
-updateClock();
-
-/* ============================
-   TASK MANAGEMENT ACTIONS
-   ============================ */
-
-// ADD TASK MODAL HTML INJECTION
-function openAddTaskModal() {
-    const modalHtml = `
-        <div class="modal-card">
-            <div class="modal-header">
-                <h3>Create New Task</h3>
-                <button class="btn-close" onclick="closeModal()">×</button>
-            </div>
-            <form id="addTaskForm">
-                <div class="form-group">
-                    <label>Task Title</label>
-                    <input type="text" id="taskTitle" required placeholder="What needs to be done?" autofocus>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Category</label>
-                        <select id="taskCategory" class="form-select">
-                            <option value="work">💼 Work</option>
-                            <option value="study">📚 Study</option>
-                            <option value="project">🚀 Project</option>
-                            <option value="personal">🏠 Personal</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Priority</label>
-                        <select id="taskPriority" class="form-select">
-                            <option value="medium">Medium</option>
-                            <option value="high">High</option>
-                            <option value="low">Low</option>
-                        </select>
+            html += `
+                <div class="time-row">
+                    <div class="time-label">${slot}</div>
+                    <div class="${className}">
+                        ${content}
                     </div>
                 </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Start Time (Optional)</label>
-                        <input type="time" id="taskStart">
-                    </div>
-                    <div class="form-group">
-                        <label>End Time (Optional)</label>
-                        <input type="time" id="taskEnd">
-                    </div>
-                </div>
-
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Create Task</button>
-                </div>
-            </form>
-        </div>
-    `;
-
-    showModal(modalHtml);
-
-    // Attach Event Listener
-    document.getElementById('addTaskForm').addEventListener('submit', handleAddTask);
-}
-
-// HANDLE ADD TASK
-async function handleAddTask(e) {
-    e.preventDefault();
-    if (!currentUser) return;
-
-    const title = document.getElementById('taskTitle').value;
-    const category = document.getElementById('taskCategory').value;
-    const priority = document.getElementById('taskPriority').value;
-    const start = document.getElementById('taskStart').value;
-    const end = document.getElementById('taskEnd').value;
-
-    const newTask = {
-        userId: currentUser.uid,
-        title: title,
-        status: 'todo',
-        priority: priority,
-        category: category,
-        timeBlock: (start && end) ? { start, end } : null,
-        createdAt: new Date().toISOString()
-    };
-
-    try {
-        await db.collection('tasks').add(newTask);
-        closeModal();
-        loadTasks(); // Refresh list
-    } catch (error) {
-        console.error("Error adding task: ", error);
-        alert("Failed to add task. Check console.");
-    }
-}
-
-// TOGGLE TASK STATUS
-async function toggleTaskStatus(taskId, currentStatus) {
-    const newStatus = currentStatus === 'completed' ? 'todo' : 'completed';
-    try {
-        await db.collection('tasks').doc(taskId).update({
-            status: newStatus
+            `;
         });
-        loadTasks();
-    } catch (error) {
-        console.error("Error updating task: ", error);
-    }
-}
 
-// DELETE TASK
-async function deleteTask(taskId) {
-    if (!confirm('Delete this task?')) return;
-    try {
-        await db.collection('tasks').doc(taskId).delete();
-        loadTasks();
-    } catch (error) {
-        console.error("Error deleting task: ", error);
-    }
-}
+        html += '</div>';
+        container.innerHTML = html;
+    },
 
-// UPDATE PROJECT PLACEHOLDER (Added for safe load)
-function updateProjectPlaceholder() {
-    const list = document.getElementById('dashboardProjectList');
-    if (list) {
-        list.innerHTML = `
-            <div class="empty-state">
-                <p>No projects yet.</p>
-                <button class="btn btn-link btn-sm" onclick="showModule('projects')">Create Project</button>
+    renderProjectsHub: (projects, tasks) => {
+        const container = document.getElementById('projectsModule');
+        if (!container) return;
+
+        if (projects.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <h3>🚀 No Active Projects</h3>
+                    <p>Start a new project to organize your big goals.</p>
+                    <button class="btn btn-primary" onclick="App.openProjectModal()">+ Create Project</button>
+                </div>
+            `;
+            return;
+        }
+
+        let html = `
+            <div class="module-header">
+                <h2>🚀 Active Projects</h2>
+                <button class="btn btn-primary btn-sm" onclick="App.openProjectModal()">+ New Project</button>
             </div>
+            <div class="projects-grid">
         `;
-    }
-}
 
-/* ============================
-   MODAL SYSTEM
-   ============================ */
+        projects.forEach(p => {
+            const pTasks = tasks.filter(t => t.projectId === p.id);
+            const total = pTasks.length;
+            const done = pTasks.filter(t => t.status === 'completed').length;
+            const progress = total === 0 ? 0 : Math.round((done / total) * 100);
 
-function showModal(content) {
-    const container = document.getElementById('modalContainer');
-    if (container) {
-        container.innerHTML = content;
-        container.classList.add('active');
-    }
-}
-
-function closeModal() {
-    const container = document.getElementById('modalContainer');
-    if (container) {
-        container.classList.remove('active');
-    }
-}
-
-// CLICK OUTSIDE TO CLOSE
-const modalContainer = document.getElementById('modalContainer');
-if (modalContainer) {
-    modalContainer.addEventListener('click', (e) => {
-        if (e.target.id === 'modalContainer') closeModal();
-    });
-}
-
-/* ============================
-   TASK FILTERING SYSTEM
-   ============================ */
-
-let currentFilter = 'all'; // Track active filter
-
-function filterTasks(filterType) {
-    currentFilter = filterType;
-    
-    // Update filter button states
-    document.querySelectorAll('.filter-tag').forEach(btn => {
-        btn.classList.remove('active');
-    });
-    event.target.classList.add('active');
-    
-    // Apply filter and re-render
-    renderTaskList();
-}
-
-function getFilteredTasks() {
-    let filtered = [...currentTasks];
-    
-    switch(currentFilter) {
-        case 'all':
-            return filtered;
-            
-        case 'today':
-            return filtered.filter(task => {
-                if (task.timeBlock) {
-                    return isToday(new Date());
-                }
-                return isToday(new Date(task.createdAt));
-            });
-            
-        case 'upcoming':
-            return filtered.filter(task => task.status !== 'completed');
-            
-        case 'high':
-            return filtered.filter(task => task.priority === 'high');
-            
-        default:
-            return filtered;
-    }
-}
-
-
-/* ============================
-   TASK EDITING SYSTEM
-   ============================ */
-
-function editTask(taskId) {
-    const task = currentTasks.find(t => t.id === taskId);
-    if (!task) return;
-    
-    const modalHtml = 
-        <div class="modal-card">
-            <div class="modal-header">
-                <h3>Edit Task</h3>
-                <button class="btn-close" onclick="closeModal()"></button>
-            </div>
-            <form id="editTaskForm">
-                <input type="hidden" id="editTaskId" value="">
-                <div class="form-group">
-                    <label>Task Title</label>
-                    <input type="text" id="editTaskTitle" required value="" autofocus>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Category</label>
-                        <select id="editTaskCategory" class="form-select">
-                            <option value="work" > Work</option>
-                            <option value="study" > Study</option>
-                            <option value="project" > Project</option>
-                            <option value="personal" > Personal</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Priority</label>
-                        <select id="editTaskPriority" class="form-select">
-                            <option value="low" >Low</option>
-                            <option value="medium" >Medium</option>
-                            <option value="high" >High</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Start Time (Optional)</label>
-                        <input type="time" id="editTaskStart" value="">
-                    </div>
-                    <div class="form-group">
-                        <label>End Time (Optional)</label>
-                        <input type="time" id="editTaskEnd" value="">
-                    </div>
-                </div>
-
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Update Task</button>
-                </div>
-            </form>
-        </div>
-    ;
-    
-    showModal(modalHtml);
-    
-    document.getElementById('editTaskForm').addEventListener('submit', handleEditTask);
-}
-
-async function handleEditTask(e) {
-    e.preventDefault();
-    if (!currentUser) return;
-    
-    const taskId = document.getElementById('editTaskId').value;
-    const title = document.getElementById('editTaskTitle').value;
-    const category = document.getElementById('editTaskCategory').value;
-    const priority = document.getElementById('editTaskPriority').value;
-    const start = document.getElementById('editTaskStart').value;
-    const end = document.getElementById('editTaskEnd').value;
-    
-    const updates = {
-        title: title,
-        priority: priority,
-        category: category,
-        timeBlock: (start && end) ? { start, end } : null
-    };
-    
-    try {
-        await db.collection('tasks').doc(taskId).update(updates);
-        closeModal();
-        loadTasks();
-    } catch (error) {
-        console.error("Error updating task: ", error);
-        alert("Failed to update task. Check console.");
-    }
-}
-
-
-/* ============================
-   TASK SEARCH SYSTEM
-   ============================ */
-
-let currentSearchTerm = '';
-
-function searchTasks(searchTerm) {
-    currentSearchTerm = searchTerm.toLowerCase();
-    renderTaskList();
-}
-
-function getSearchedAndFilteredTasks() {
-    let tasks = currentFilter === 'all' ? currentTasks : getFilteredTasks();
-    
-    if (currentSearchTerm) {
-        tasks = tasks.filter(task => 
-            task.title.toLowerCase().includes(currentSearchTerm) ||
-            task.category.toLowerCase().includes(currentSearchTerm)
-        );
-    }
-    
-    return tasks;
-}
-
-
-/* ============================
-   FEATURE 4: ACTIVE TASK FOCUS + TIMER
-   ============================ */
-
-let activeTask = null;
-let focusTimerInterval = null;
-
-function detectActiveTask() {
-    const now = new Date();
-    const currentTime = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
-    
-    // Find task with time block matching current time
-    const active = currentTasks.find(task => {
-        if (!task.timeBlock || task.status === 'completed') return false;
-        return currentTime >= task.timeBlock.start && currentTime <= task.timeBlock.end;
-    });
-    
-    if (active && active.id !== (activeTask ? activeTask.id : null)) {
-        setActiveTask(active);
-    } else if (!active && activeTask) {
-        clearActiveTask();
-    }
-}
-
-function setActiveTask(task) {
-    activeTask = task;
-    renderFocusCard();
-    startFocusTimer();
-}
-
-function clearActiveTask() {
-    activeTask = null;
-    if (focusTimerInterval) clearInterval(focusTimerInterval);
-    renderFocusCard();
-}
-
-function renderFocusCard() {
-    const container = document.getElementById('currentFocusContent');
-    if (!container) return;
-    
-    if (!activeTask) {
-        container.innerHTML = 
-            <div class="empty-state">
-                <p>No active task right now.</p>
-                <button class="btn btn-outline btn-sm" onclick="showModule('tasks')">View Tasks</button>
-            </div>
-        ;
-        return;
-    }
-    
-    container.innerHTML = 
-        <div class="focus-task-display">
-            <div class="focus-task-title"></div>
-            <div class="focus-task-meta">
-                <span class="badg badge-"></span>
-                <span class="badg priority-"> priority</span>
-            </div>
-            <div class="focus-timer" id="focusTimer">00:00</div>
-            <div class="focus-actions">
-                <button class="btn btn-primary btn-sm" onclick="completeActiveTask()"> Complete</button>
-                <button class="btn btn-outline btn-sm" onclick="clearActiveTask()"> Pause</button>
-            </div>
-        </div>
-    ;
-}
-
-function startFocusTimer() {
-    if (focusTimerInterval) clearInterval(focusTimerInterval);
-    
-    focusTimerInterval = setInterval(() => {
-        if (!activeTask || !activeTask.timeBlock) return;
-        
-        const now = new Date();
-        const [endHour, endMin] = activeTask.timeBlock.end.split(':').map(Number);
-        const endTime = new Date(now);
-        endTime.setHours(endHour, endMin, 0, 0);
-        
-        const remaining = Math.max(0, Math.floor((endTime - now) / 1000));
-        const minutes = Math.floor(remaining / 60);
-        const seconds = remaining % 60;
-        
-        const timerEl = document.getElementById('focusTimer');
-        if (timerEl) {
-            timerEl.textContent = ${minutes.toString().padStart(2, '0')}:;
-        }
-        
-        if (remaining === 0) {
-            clearInterval(focusTimerInterval);
-        }
-    }, 1000);
-}
-
-async function completeActiveTask() {
-    if (!activeTask) return;
-    await toggleTaskStatus(activeTask.id, activeTask.status);
-    clearActiveTask();
-}
-
-// Auto-detect every minute
-setInterval(detectActiveTask, 60000);
-detectActiveTask(); // Initial check
-
-
-/* ============================
-   FEATURE 6: PROJECTS MODULE
-   ============================ */
-
-let currentProjects = [];
-
-async function loadProjects() {
-    if (!currentUser) return;
-    
-    // In a real app we'd load this once or cache it
-    const snapshot = await db.collection('projects')
-        .where('userId', '==', currentUser.uid)
-        .orderBy('createdAt', 'desc')
-        .get();
-        
-    currentProjects = [];
-    snapshot.forEach(doc => {
-        currentProjects.push({ id: doc.id, ...doc.data() });
-    });
-    
-    renderProjectsView();
-    updateDashboardProjects();
-}
-
-function renderProjectsView() {
-    const projectsModule = document.getElementById('projectsModule');
-    if (!projectsModule) return;
-    
-    let html = '<div class="projects-view">';
-    html += '<div class="module-header"><h2> Projects</h2>';
-    html += '<button class="btn btn-primary btn-sm" onclick="openAddProjectModal()">+ New Project</button></div>';
-    
-    if (currentProjects.length === 0) {
-        html += '<div class="empty-state">No projects yet. Create your first project!</div>';
-    } else {
-        html += '<div class="projects-grid">';
-        currentProjects.forEach(project => {
-            // Calculate progress based on tasks linked to this project
-            // Note: need to ensure tasks have projectId
-            const projectTasks = currentTasks.filter(t => t.projectId === project.id);
-            const completed = projectTasks.filter(t => t.status === 'completed').length;
-            const total = projectTasks.length;
-            const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
-            
-            html += 
-                <div class="project-card">
+            html += `
+                <div class="project-card" onclick="App.openProjectDetails('${p.id}')">
                     <div class="project-header">
-                        <h3></h3>
-                        <span class="badge badge-"></span>
-                    </div>
-                    <p class="project-description"></p>
-                    <div class="project-progress">
-                        <div class="progress-bar">
-                            <div class="progress-fill" style="width: %"></div>
+                        <div class="project-icon">${p.icon || '🚀'}</div>
+                        <div class="project-options">
+                            <button class="btn-icon" onclick="event.stopPropagation(); App.deleteProject('${p.id}')">🗑️</button>
                         </div>
-                        <span class="progress-text">/ tasks (%)</span>
                     </div>
-                    <div class="project-actions">
-                        <button class="btn btn-icon" onclick="deleteProject('')"></button>
+                    <h3 class="project-title">${p.title}</h3>
+                    <p class="project-desc">${p.description || 'No description'}</p>
+                    <div class="project-meta">
+                        <span class="task-count">${done}/${total} Tasks</span>
+                        <span class="deadline">${p.deadline ? '📅 ' + new Date(p.deadline).toLocaleDateString() : ''}</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${progress}%"></div>
                     </div>
                 </div>
-            ;
+            `;
         });
+
         html += '</div>';
-    }
-    
-    html += '</div>';
-    projectsModule.innerHTML = html;
-}
+        container.innerHTML = html;
+    },
 
-function updateDashboardProjects() {
-    const container = document.getElementById('dashboardProjectList');
-    if (!container) return;
-    
-    if (currentProjects.length === 0) {
-        container.innerHTML = '<div class="empty-state"><p>No projects yet.</p></div>';
-        return;
-    }
-    
-    const activeProjects = currentProjects.filter(p => p.status !== 'completed').slice(0, 3);
-    container.innerHTML = activeProjects.map(project => {
-        const projectTasks = currentTasks.filter(t => t.projectId === project.id);
-        const completed = projectTasks.filter(t => t.status === 'completed').length;
-        const total = projectTasks.length;
-        const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
-        
-        return 
-            <div class="dashboard-project-item" onclick="showModule('projects')">
-                <div class="project-mini-title"></div>
-                <div class="progress-bar-mini">
-                    <div class="progress-fill" style="width: %"></div>
+    renderDashboard: (tasks) => {
+        const todayDone = tasks.filter(t => t.status === 'completed' && Utils.isToday(t.createdAt)).length;
+        const todayPending = tasks.filter(t => t.status !== 'completed').length;
+
+        document.getElementById('todayDoneCount').textContent = todayDone;
+        document.getElementById('todayPendingCount').textContent = todayPending;
+
+        // Productivity Stat
+        const totalToday = todayDone + todayPending;
+        const productivity = totalToday === 0 ? 0 : Math.round((todayDone / totalToday) * 100);
+        const prodEl = document.getElementById('productivityStat');
+        if (prodEl) prodEl.textContent = `${productivity}%`;
+
+        // Mini Schedule
+        const schedContainer = document.getElementById('miniSchedule');
+        const scheduled = tasks.filter(t => t.timeBlock && t.status !== 'completed').sort((a, b) => a.timeBlock.start.localeCompare(b.timeBlock.start));
+
+        if (scheduled.length > 0) {
+            schedContainer.innerHTML = scheduled.slice(0, 3).map(t => `
+                <div class="schedule-item">
+                    <span class="schedule-time">${t.timeBlock.start}</span>
+                    <span class="schedule-title">${t.title}</span>
                 </div>
+            `).join('');
+        } else {
+            schedContainer.innerHTML = '<div class="empty-state">No scheduled tasks for today.</div>';
+        }
+    },
+
+    renderTaskList: (tasks, filter = 'all') => {
+        const container = document.getElementById('fullTaskList');
+        if (!container) return;
+
+        let filtered = [...tasks];
+        if (filter === 'today') filtered = tasks.filter(t => Utils.isToday(t.createdAt));
+        if (filter === 'upcoming') filtered = tasks.filter(t => t.status !== 'completed');
+        if (filter === 'high') filtered = tasks.filter(t => t.priority === 'high');
+
+        if (filtered.length === 0) {
+            container.innerHTML = '<div class="empty-state">No tasks found.</div>';
+            return;
+        }
+
+        container.innerHTML = `
+            <div class="kanban-board">
+                <div class="kanban-column" id="col-todo"><h3>📝 To Do</h3><div class="kanban-items"></div></div>
+                <div class="kanban-column" id="col-progress"><h3>🏃 In Progress</h3><div class="kanban-items"></div></div>
+                <div class="kanban-column" id="col-done"><h3>✅ Done</h3><div class="kanban-items"></div></div>
             </div>
-        ;
-    }).join('');
-}
+        `;
 
-function openAddProjectModal() {
-    const modalHtml = 
-        <div class="modal-card">
-            <div class="modal-header">
-                <h3>Create New Project</h3>
-                <button class="btn-close" onclick="closeModal()"></button>
-            </div>
-            <form id="addProjectForm">
-                <div class="form-group">
-                    <label>Project Title</label>
-                    <input type="text" id="projectTitle" required placeholder="e.g., Build Website" autofocus>
-                </div>
-                <div class="form-group">
-                    <label>Description</label>
-                    <textarea id="projectDescription" rows="3" placeholder="Description..."></textarea>
-                </div>
-                <div class="form-group">
-                    <label>Status</label>
-                    <select id="projectStatus" class="form-select">
-                        <option value="active">Active</option>
-                        <option value="planning">Planning</option>
-                        <option value="completed">Completed</option>
-                    </select>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Create Project</button>
-                </div>
-            </form>
-        </div>
-    ;
-    
-    showModal(modalHtml);
-    document.getElementById('addProjectForm').addEventListener('submit', handleAddProject);
-}
+        filtered.forEach(task => {
+            let status = task.status;
+            if (status !== 'in_progress' && status !== 'completed') status = 'todo';
 
-async function handleAddProject(e) {
-    e.preventDefault();
-    if (!currentUser) return;
-    
-    const newProject = {
-        userId: currentUser.uid,
-        title: document.getElementById('projectTitle').value,
-        description: document.getElementById('projectDescription').value,
-        status: document.getElementById('projectStatus').value,
-        createdAt: new Date().toISOString()
-    };
-    
-    try {
-        await db.collection('projects').add(newProject);
-        closeModal();
-        loadProjects();
-    } catch (error) {
-        console.error("Error adding project: ", error);
-        alert("Failed to add project.");
-    }
-}
+            const item = document.createElement('div');
+            item.className = `task-item ${task.priority}-priority ${status}`;
+            item.draggable = true;
 
-async function deleteProject(projectId) {
-    if (!confirm('Delete this project?')) return;
-    try {
-        await db.collection('projects').doc(projectId).delete();
-        loadProjects();
-    } catch (error) {
-        console.error("Error deleting project: ", error);
-    }
-}
-// Update showModule to trigger loadProjects
-const originalShowModuleForProjects = showModule;
-showModule = function(moduleName) {
-    originalShowModuleForProjects(moduleName);
-    if (moduleName === 'projects') {
-        loadProjects();
+            let icon = status === 'completed' ? '✅' : (status === 'in_progress' ? '⏳' : '⬜');
+
+            item.innerHTML = `
+                <div class="task-checkbox" onclick="App.toggleStatus('${task.id}', '${status}')">
+                    ${icon}
+                </div>
+                <div class="task-details">
+                    <div class="task-title">${task.title}</div>
+                    <div class="task-meta">
+                        <span class="badge badge-${task.category}">${task.category}</span>
+                        ${task.timeBlock ? `<span class="time-badge">🕒 ${task.timeBlock.start} - ${task.timeBlock.end}</span>` : ''}
+                    </div>
+                </div>
+                <div class="task-actions">
+                    <button class="btn-icon" onclick="App.editTask('${task.id}')">Edit</button>
+                    <button class="btn-icon" onclick="App.deleteTask('${task.id}')">Delete</button>
+                </div>
+            `;
+
+            if (status === 'todo') container.querySelector('#col-todo .kanban-items').appendChild(item);
+            else if (status === 'in_progress') container.querySelector('#col-progress .kanban-items').appendChild(item);
+            else container.querySelector('#col-done .kanban-items').appendChild(item);
+        });
     }
 };
-// Also load projects initially
-// This should be called in loadData
-const originalLoadDataForProjects = loadData;
-loadData = function() {
-    originalLoadDataForProjects();
-    loadProjects();
-};
 
-/* ============================
-   FEATURE 7: GOALS SYSTEM
-   ============================ */
+// ==========================================
+// APP CONTROLLER (Global Functions)
+// ==========================================
+const App = {
+    state: {
+        user: null,
+        tasks: [],
+        projects: []
+    },
 
-let currentGoals = [];
+    init: () => {
+        // Attach Auth Event Listeners
+        document.getElementById('loginForm').addEventListener('submit', App.handleLogin);
+        document.getElementById('signupForm').addEventListener('submit', App.handleSignup);
 
-async function loadGoals() {
-    if (!currentUser) return;
-    
-    const snapshot = await db.collection('goals')
-        .where('userId', '==', currentUser.uid)
-        .orderBy('deadline', 'asc')
-        .get();
-        
-    currentGoals = [];
-    snapshot.forEach(doc => {
-        currentGoals.push({ id: doc.id, ...doc.data() });
-    });
-    
-    renderGoalsView();
-}
+        Auth.init(
+            async (user) => {
+                App.state.user = user;
+                document.getElementById('authContainer').style.display = 'none';
+                document.getElementById('appContainer').style.display = 'flex';
+                document.getElementById('userName').textContent = user.displayName || user.email;
+                document.getElementById('userAvatar').textContent = (user.displayName || user.email)[0].toUpperCase();
 
-function renderGoalsView() {
-    const goalsModule = document.getElementById('goalsModule');
-    if (!goalsModule) return;
-    
-    let html = '<div class="goals-view">';
-    html += '<div class="module-header"><h2> Goals</h2>';
-    html += '<button class="btn btn-primary btn-sm" onclick="openAddGoalModal()">+ New Goal</button></div>';
-    
-    if (currentGoals.length === 0) {
-        html += '<div class="empty-state">No goals set yet. Aim high!</div>';
-    } else {
-        html += '<div class="goals-grid">';
-        currentGoals.forEach(goal => {
-            // Visualize Deadline
-            const today = new Date();
-            const deadline = new Date(goal.deadline);
-            const daysLeft = Math.ceil((deadline - today) / (1000 * 60 * 60 * 24));
-            let timeLeftClass = daysLeft < 7 ? 'urgent' : '';
-            
-            html += 
-                <div class="card goal-card">
-                    <div class="card-header">
-                        <h3></h3>
-                        <span class="badge badge-"></span>
-                    </div>
-                    <p class="goal-description"></p>
-                    <div class="goal-meta">
-                        <span class="deadline "> Due:  ( days left)</span>
-                    </div>
-                    <div class="goal-actions">
-                         <button class="btn btn-icon" onclick="deleteGoal('')"></button>
-                    </div>
-                </div>
-            ;
-        });
-        html += '</div>';
-    }
-    
-    html += '</div>';
-    goalsModule.innerHTML = html;
-}
+                // Init Theme
+                const savedTheme = localStorage.getItem('theme') || 'dark';
+                if (savedTheme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+                else document.documentElement.removeAttribute('data-theme');
+                UI.updateThemeIcon(savedTheme);
 
-function openAddGoalModal() {
-    const modalHtml = 
-        <div class="modal-card">
-            <div class="modal-header">
-                <h3>Set New Goal</h3>
-                <button class="btn-close" onclick="closeModal()"></button>
-            </div>
-            <form id="addGoalForm">
-                <div class="form-group">
-                    <label>Goal Title</label>
-                    <input type="text" id="goalTitle" required placeholder="e.g., Run a Marathon" autofocus>
-                </div>
-                <div class="form-group">
-                    <label>Description (Success Criteria)</label>
-                    <textarea id="goalDescription" rows="3" placeholder="What does success look like?"></textarea>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Deadline</label>
-                        <input type="date" id="goalDeadline" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Status</label>
-                        <select id="goalStatus" class="form-select">
-                            <option value="active">In Progress</option>
-                            <option value="achieved">Achieved</option>
-                            <option value="paused">Paused</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Set Goal</button>
-                </div>
-            </form>
-        </div>
-    ;
-    
-    showModal(modalHtml);
-    document.getElementById('addGoalForm').addEventListener('submit', handleAddGoal);
-}
+                UI.startClock();
+                await App.refresh();
+            },
+            () => {
+                App.state.user = null;
+                document.getElementById('authContainer').style.display = 'flex';
+                document.getElementById('appContainer').style.display = 'none';
+            }
+        );
+    },
 
-async function handleAddGoal(e) {
-    e.preventDefault();
-    if (!currentUser) return;
-    
-    const newGoal = {
-        userId: currentUser.uid,
-        title: document.getElementById('goalTitle').value,
-        description: document.getElementById('goalDescription').value,
-        deadline: document.getElementById('goalDeadline').value,
-        status: document.getElementById('goalStatus').value,
-        createdAt: new Date().toISOString()
-    };
-    
-    try {
-        await db.collection('goals').add(newGoal);
-        closeModal();
-        loadGoals();
-    } catch (error) {
-        console.error("Error adding goal: ", error);
-        alert("Failed to add goal.");
-    }
-}
+    refresh: async () => {
+        if (!App.state.user) return;
+        App.state.tasks = await Data.Tasks.fetch(App.state.user.uid);
+        App.state.projects = await Data.Projects.fetch(App.state.user.uid);
 
-async function deleteGoal(goalId) {
-    if (!confirm('Delete this goal?')) return;
-    try {
-        await db.collection('goals').doc(goalId).delete();
-        loadGoals();
-    } catch (error) {
-        console.error("Error deleting goal: ", error);
-    }
-}
+        UI.renderDashboard(App.state.tasks);
+        UI.renderTaskList(App.state.tasks);
 
-// Hook into showModule
-const showModuleForGoals = showModule;
-showModule = function(moduleName) {
-    showModuleForGoals(moduleName);
-    if (moduleName === 'goals') {
-        loadGoals();
-    }
-}
+        // Refresh active module if needed
+        const activeModule = document.querySelector('.module.active');
+        if (activeModule && activeModule.id === 'projectsModule') {
+            UI.renderProjectsHub(App.state.projects, App.state.tasks);
+        }
+    },
 
+    // Global Actions (exposed to window for onclick)
+    switchAuthTab: (tab) => {
+        document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
 
-/* ============================
-   FEATURE 8: LEARNING MODULE
-   ============================ */
+        const tabs = document.querySelectorAll('.auth-tab');
+        if (tab === 'login') tabs[0].classList.add('active');
+        else tabs[1].classList.add('active');
 
-let currentCourses = [];
+        document.getElementById(`${tab}Form`).classList.add('active');
+    },
 
-async function loadLearning() {
-    if (!currentUser) return;
-    
-    const snapshot = await db.collection('learning_courses')
-        .where('userId', '==', currentUser.uid)
-        .orderBy('createdAt', 'desc')
-        .get();
-        
-    currentCourses = [];
-    snapshot.forEach(doc => {
-        currentCourses.push({ id: doc.id, ...doc.data() });
-    });
-    
-    renderLearningView();
-}
-
-function renderLearningView() {
-    const learnModule = document.getElementById('learningModule');
-    if (!learnModule) return;
-    
-    let html = '<div class="learning-view">';
-    html += '<div class="module-header"><h2> Learning Paths</h2>';
-    html += '<button class="btn btn-primary btn-sm" onclick="openAddCourseModal()">+ Add Course</button></div>';
-    
-    if (currentCourses.length === 0) {
-        html += '<div class="empty-state">No courses added. What do you want to learn?</div>';
-    } else {
-        html += '<div class="learning-grid">';
-        currentCourses.forEach(course => {
-            html += 
-                <div class="card learning-card">
-                    <div class="card-header">
-                        <h3></h3>
-                        <span class="badg badge-study"></span>
-                    </div>
-                    <p></p>
-                    <div class="learning-actions">
-                         <button class="btn btn-primary btn-sm" onclick="alert('Detailed lesson view coming in Phase 4.5!')">Continue Learning</button>
-                         <button class="btn btn-icon" onclick="deleteCourse('')"></button>
-                    </div>
-                </div>
-            ;
-        });
-        html += '</div>';
-    }
-    html += '</div>';
-    learnModule.innerHTML = html;
-}
-
-function openAddCourseModal() {
-    const modalHtml = 
-        <div class="modal-card">
-            <div class="modal-header">
-                <h3>Add New Course</h3>
-                <button class="btn-close" onclick="closeModal()"></button>
-            </div>
-            <form id="addCourseForm">
-                <div class="form-group">
-                    <label>Course Title</label>
-                    <input type="text" id="courseTitle" required placeholder="e.g., Advanced React Patterns" autofocus>
-                </div>
-                <div class="form-group">
-                    <label>Platform / Source</label>
-                    <input type="text" id="coursePlatform" placeholder="e.g., Udemy, Coursera, Book">
-                </div>
-                 <div class="form-group">
-                    <label>Description</label>
-                    <textarea id="courseDescription" rows="2"></textarea>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Add Course</button>
-                </div>
-            </form>
-        </div>
-    ;
-    
-    showModal(modalHtml);
-    document.getElementById('addCourseForm').addEventListener('submit', handleAddCourse);
-}
-
-async function handleAddCourse(e) {
-    e.preventDefault();
-    if (!currentUser) return;
-    
-    const newCourse = {
-        userId: currentUser.uid,
-        title: document.getElementById('courseTitle').value,
-        platform: document.getElementById('coursePlatform').value,
-        description: document.getElementById('courseDescription').value,
-        createdAt: new Date().toISOString()
-    };
-    
-    try {
-        await db.collection('learning_courses').add(newCourse);
-        closeModal();
-        loadLearning();
-    } catch (error) {
-        console.error("Error adding course: ", error);
-        alert("Failed");
-    }
-}
-
-async function deleteCourse(id) {
-    if (!confirm('Delete this course?')) return;
-    await db.collection('learning_courses').doc(id).delete();
-    loadLearning();
-}
-
-// Hook into showModule
-const showModuleForLearning = showModule;
-showModule = function(moduleName) {
-    showModuleForLearning(moduleName);
-    if (moduleName === 'learning') {
-        loadLearning();
-    }
-}
-
-
-/* ============================
-   FEATURE 10, 11, 12: POLISH (Analytics, Shortcuts, Notifications)
-   ============================ */
-
-/* FEATURE 11: KEYBOARD SHORTCUTS */
-document.addEventListener('keydown', (e) => {
-    // Ctrl+K -> Quick Task
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    handleLogin: async (e) => {
         e.preventDefault();
-        openAddTaskModal();
+        const email = document.getElementById('loginEmail').value;
+        const password = document.getElementById('loginPassword').value;
+
+        UI.showToast('Authenticating...', 'info');
+
+        const res = await Auth.login(email, password);
+        if (res.success) {
+            UI.showToast('Welcome back!', 'success');
+        } else {
+            console.error(res.error);
+            let msg = 'Login failed. Please check your credentials.';
+            if (res.error.includes('auth/user-not-found')) msg = 'User not found.';
+            if (res.error.includes('auth/wrong-password')) msg = 'Incorrect password.';
+            if (res.error.includes('network')) msg = 'Network error. Try Guest Mode if testing locally.';
+            UI.showToast(msg, 'error');
+        }
+    },
+
+    handleGuestLogin: async () => {
+        const res = await Auth.guestLogin();
+        App.state.user = res.user;
+        UI.showToast('Logged in as Guest', 'info');
+
+        // Manual state update since no firebase auth listener for guest
+        document.getElementById('authContainer').style.display = 'none';
+        document.getElementById('appContainer').style.display = 'flex';
+        document.getElementById('userName').textContent = res.user.displayName;
+        document.getElementById('userAvatar').textContent = 'G';
+
+        // Mock data for guest
+        App.state.tasks = [];
+        UI.renderDashboard([]);
+        UI.renderTaskList([]);
+    },
+
+    handleSignup: async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('signupEmail').value;
+        const password = document.getElementById('signupPassword').value;
+        const name = document.getElementById('signupName').value;
+
+        if (password.length < 6) {
+            UI.showToast('Password must be at least 6 characters', 'error');
+            return;
+        }
+
+        const res = await Auth.signup(email, password, name);
+        if (res.success) {
+            UI.showToast('Account created successfully!', 'success');
+        } else {
+            UI.showToast(res.error, 'error');
+        }
+    },
+
+    handleLogout: () => Auth.logout(),
+
+    openAddTaskModal: (startTime = '') => {
+        UI.showModal(`
+            <div class="modal-card">
+                <div class="modal-header"><h3>New Task</h3></div>
+                <form onsubmit="App.handleAddTask(event)">
+                    <div class="form-group"><label>Title</label><input id="taskTitle" required autofocus placeholder="What do you need to do?"></div>
+                    <div class="form-row">
+                        <div class="form-group"><label>Category</label><select id="taskCategory" class="form-select">
+                            <option value="work">💼 Work</option><option value="personal">🏠 Personal</option>
+                            <option value="study">📚 Study</option><option value="project">🚀 Project</option>
+                        </select></div>
+                        <div class="form-group"><label>Priority</label><select id="taskPriority" class="form-select">
+                            <option value="medium">Medium</option><option value="high">High</option>
+                            <option value="low">Low</option>
+                        </select></div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group"><label>Start</label><input type="time" id="taskStart" value="${startTime}"></div>
+                        <div class="form-group"><label>End</label><input type="time" id="taskEnd" value="${startTime ? startTime.split(':')[0] + ':59' : ''}"></div>
+                    </div>
+                    <div class="modal-footer"><button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button> <button type="submit" class="btn btn-primary">Create</button></div>
+                </form>
+            </div>
+        `);
+    },
+
+    openAddTaskModalWithTime: (startTime) => {
+        App.openAddTaskModal(startTime);
+    },
+
+    handleAddTask: async (e) => {
+        e.preventDefault();
+        const title = document.getElementById('taskTitle').value;
+        const category = document.getElementById('taskCategory').value;
+        const priority = document.getElementById('taskPriority').value;
+
+        const start = document.getElementById('taskStart').value;
+        const end = document.getElementById('taskEnd').value;
+
+        // Conflict Auto-Check
+        if (start && end) {
+            if (end <= start) {
+                UI.showToast('End time must be after start time', 'error');
+                return;
+            }
+
+            // Filter out completed tasks for conflict (optional choice, but usually we want to know about active conflicts)
+            // Using all tasks for safety
+            const hasConflict = Schedule.checkConflict(App.state.tasks, start, end);
+            if (hasConflict) {
+                if (!confirm('⚠️ Conflict detected! You already have a task at this time. Add anyway?')) {
+                    return;
+                }
+            }
+        }
+
+        const taskData = { title, category, priority, status: 'todo' };
+        if (start && end) {
+            taskData.timeBlock = { start, end };
+        }
+
+        await Data.Tasks.add(App.state.user.uid, taskData);
+        UI.closeModal();
+        App.refresh();
+    },
+
+    toggleStatus: async (id, currentStatus) => {
+        let newStatus = currentStatus === 'in_progress' ? 'completed' : (currentStatus === 'completed' ? 'todo' : 'in_progress');
+        await Data.Tasks.update(id, { status: newStatus });
+        App.refresh();
+    },
+
+    deleteTask: async (id) => {
+        if (confirm('Delete?')) {
+            await Data.Tasks.delete(id);
+            App.refresh();
+        }
+    },
+
+    openEditProfileModal: () => {
+        const currentName = App.state.user.displayName || App.state.user.email;
+        UI.showModal(`
+            <div class="modal-card">
+                <div class="modal-header"><h3>Edit Profile</h3><button class="btn-close" onclick="closeModal()">×</button></div>
+                <form onsubmit="App.handleUpdateProfile(event)">
+                    <div class="form-group">
+                        <label>Display Name</label>
+                        <input id="editProfileName" type="text" value="${currentName}" required autofocus>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save Changes</button>
+                    </div>
+                </form>
+            </div>
+        `);
+    },
+
+    handleUpdateProfile: async (e) => {
+        e.preventDefault();
+        const newName = document.getElementById('editProfileName').value;
+
+        UI.showToast('Updating profile...', 'info');
+
+        // Handle Guest Mode specially or just mock it
+        if (App.state.user.uid === 'guest123') {
+            App.state.user.displayName = newName;
+            document.getElementById('userName').textContent = newName;
+            document.getElementById('userAvatar').textContent = newName[0].toUpperCase();
+            UI.showToast('Profile updated (Guest Mode)', 'success');
+            UI.closeModal();
+            return;
+        }
+
+        const res = await Auth.updateProfile(newName);
+        if (res.success) {
+            UI.showToast('Profile updated successfully!', 'success');
+            // Update local state and UI immediately
+            App.state.user.displayName = newName;
+            document.getElementById('userName').textContent = newName;
+            document.getElementById('userAvatar').textContent = newName[0].toUpperCase();
+            UI.closeModal();
+        } else {
+            UI.showToast(res.error, 'error');
+        }
     }
-    // Esc -> Close Modal
-    if (e.key === 'Escape') {
-        closeModal();
-    }
-});
+};
 
-/* FEATURE 12: NOTIFICATIONS */
-function requestNotificationPermission() {
-    if (Notification.permission !== "granted") {
-        Notification.requestPermission();
-    }
-}
-// Request on load
-setTimeout(requestNotificationPermission, 3000);
+// Start App
+App.init();
 
-function sendNotification(title, body) {
-    if (Notification.permission === "granted") {
-        new Notification(title, { body: body, icon: 'favicon.ico' });
-    }
-}
-
-/* FEATURE 10: ANALYTICS (Simple render) */
-// enhancing renderDashboard to show a productivity score
-function calculateProductivity() {
-    const completed = currentTasks.filter(t => t.status === 'completed').length;
-    const total = currentTasks.length;
-    if (total === 0) return 0;
-    return Math.round((completed / total) * 100);
-}
-// update productivity stat
-setInterval(() => {
-    const prodEl = document.querySelector('.stat-value'); // First one is Prod
-    if (prodEl) prodEl.textContent = calculateProductivity() + '%';
-}, 5000);
-
-
-/* ============================
-   FEATURE 13: THEME TOGGLE
-   ============================ */
-function toggleTheme() {
-    const html = document.documentElement;
-    const current = html.getAttribute('data-theme');
-    const next = current === 'light' ? 'dark' : 'light';
-    html.setAttribute('data-theme', next);
-    localStorage.setItem('lcc-theme', next);
-}
-
-// Init Theme
-const savedTheme = localStorage.getItem('lcc-theme') || 'dark';
-document.documentElement.setAttribute('data-theme', savedTheme);
-
-// Add toggle button to sidebar footer
-function addThemeBtn() {
-    const footer = document.querySelector('.sidebar-footer');
-    if (footer && !document.getElementById('themeBtn')) {
-        const btn = document.createElement('button');
-        btn.id = 'themeBtn';
-        btn.className = 'btn-icon';
-        btn.innerHTML = '';
-        btn.onclick = toggleTheme;
-        btn.style.marginRight = '10px';
-        footer.insertBefore(btn, footer.firstChild);
-    }
-}
-setInterval(addThemeBtn, 1000);
-
-/* ============================
-   FEATURE 14, 15, 16, 17: ADVANCED TASK FEATURES (Data Model Support)
-   ============================ */
-
-// Note: Full UI for subtasks/recurring requires larger refactor of the modal.
-// For now, we update the Task Data Model to support these fields in Firestore
-// so they are ready for Phase 2 UI.
-
-// Feature 16: Recurring Logic (Skeleton)
-function checkRecurringTasks() {
-    // This would run daily to clone recurring tasks
-    console.log("Checking recurring tasks...");
-}
-// Run once on load
-checkRecurringTasks();
-
+// EXPOSE GLOBALS FOR ONCLICK ATTRIBUTES
+window.switchAuthTab = App.switchAuthTab;
+window.handleLogout = App.handleLogout;
+window.handleGuestLogin = App.handleGuestLogin;
+window.showModule = (name) => {
+    UI.showModule(name);
+    // Trigger render for specific modules
+    if (name === 'schedule' && App.state.tasks) UI.renderSchedule(App.state.tasks);
+    if (name === 'projects' && App.state.projects) UI.renderProjectsHub(App.state.projects, App.state.tasks);
+};
+window.openAddTaskModal = App.openAddTaskModal;
+window.closeModal = UI.closeModal;
+window.openProjectModal = App.openProjectModal;
+window.filterTasks = (filter) => UI.renderTaskList(App.state.tasks, filter);
+window.App = App; // For deeper access
