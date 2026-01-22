@@ -15,8 +15,19 @@
     --accent-purple: #bc8cff;
     --accent-red: #da3633;
     --accent-orange: #d29922;
+    --accent-white-gray: linear-gradient(90deg, #fff, #bbb);
+    --accent-green: rgb(142, 239, 168);
+    /* Extracted from logo */
 
     --border-color: #30363d;
+
+    /* COMPONENT VARIABLES */
+    --nav-hover-bg: rgba(255, 255, 255, 0.05);
+    --nav-active-bg: rgba(88, 166, 255, 0.1);
+    --modal-overlay-bg: rgba(0, 0, 0, 0.7);
+    --toast-bg: #1c2128;
+    /* Same as card in dark mode */
+    --toast-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 
     /* SPACING */
     --space-xs: 4px;
@@ -69,8 +80,16 @@ body {
     --text-primary: #1a1a1a;
     --text-secondary: #65676b;
     --border-color: #e4e6eb;
+    --accent-white-gray: linear-gradient(90deg, #000000, #135300);
 
     --bg-auth: #f4f6f8;
     --text-brand-gradient-start: #1a1a1a;
     --text-brand-gradient-end: #555;
+
+    /* COMPONENT VARIABLES - LIGHT MODE */
+    --nav-hover-bg: rgba(0, 0, 0, 0.05);
+    --nav-active-bg: rgba(88, 166, 255, 0.15);
+    --modal-overlay-bg: rgba(0, 0, 0, 0.5);
+    --toast-bg: #ffffff;
+    --toast-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
