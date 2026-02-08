@@ -18,10 +18,9 @@
     <link rel="stylesheet" href="css/auth.css" />
     <link rel="stylesheet" href="css/modules.css" />
 
-    <!-- FIREBASE (compat) -->
-    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+    <!-- SUPABASE -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
 </head>
 
 <body>
@@ -40,11 +39,11 @@
             <form id="loginForm" class="auth-form active">
                 <div class="form-group">
                     <label for="loginEmail">Email Address</label>
-                    <input type="email" id="loginEmail" required placeholder="you@example.com" />
+                    <input type="email" id="loginEmail" name="email" required placeholder="you@example.com" />
                 </div>
                 <div class="form-group">
                     <label for="loginPassword">Password</label>
-                    <input type="password" id="loginPassword" required placeholder="••••••••" />
+                    <input type="password" id="loginPassword" name="password" required placeholder="••••••••" />
                 </div>
                 <button type="submit" class="btn btn-primary btn-block">Initialize System &rarr;</button>
                 <div id="authMessage" class="auth-message"></div>
@@ -54,15 +53,16 @@
             <form id="signupForm" class="auth-form">
                 <div class="form-group">
                     <label for="signupName">Your Name</label>
-                    <input type="text" id="signupName" required placeholder="Your Name" />
+                    <input type="text" id="signupName" name="name" required placeholder="Your Name" />
                 </div>
                 <div class="form-group">
                     <label for="signupEmail">Email Address</label>
-                    <input type="email" id="signupEmail" required placeholder="you@example.com" />
+                    <input type="email" id="signupEmail" name="email" required placeholder="you@example.com" />
                 </div>
                 <div class="form-group">
                     <label for="signupPassword">Password</label>
-                    <input type="password" id="signupPassword" required placeholder="Minimum 6 characters" />
+                    <input type="password" id="signupPassword" name="password" required
+                        placeholder="Minimum 6 characters" />
                 </div>
                 <button type="submit" class="btn btn-primary btn-block">Create Command Center &rarr;</button>
             </form>
@@ -84,6 +84,18 @@
                 <div class="logo-text">LCC System</div>
             </div>
 
+            <!-- CHANNEL SWITCHER -->
+            <div class="channel-switcher" id="channelSwitcher">
+                <label class="channel-label">
+                    <span class="icon">📺</span> Channel
+                </label>
+                <select class="channel-select" id="channelSelect" onchange="App.switchChannel(this.value)">
+                    <option value="">All Channels</option>
+                </select>
+                <button class="btn-icon channel-settings" onclick="App.openChannelManager()"
+                    title="Manage Channels">⚙️</button>
+            </div>
+
             <!-- NAVIGATION MENU -->
             <nav class="sidebar-nav" id="sidebarNav">
                 <button class="nav-item active" onclick="showModule('dashboard')">
@@ -91,6 +103,15 @@
                 </button>
                 <button class="nav-item" onclick="showModule('tasks')">
                     <span class="icon">✅</span> Tasks
+                </button>
+                <button class="nav-item" onclick="showModule('content')">
+                    <span class="icon">🎬</span> Content Hub
+                </button>
+                <button class="nav-item" onclick="showModule('prompts')">
+                    <span class="icon">✨</span> Prompts
+                </button>
+                <button class="nav-item" onclick="showModule('media')">
+                    <span class="icon">🎨</span> Media Studio
                 </button>
                 <button class="nav-item" onclick="showModule('projects')">
                     <span class="icon">🚀</span> Projects
@@ -104,7 +125,17 @@
                 <button class="nav-item" onclick="showModule('learning')">
                     <span class="icon">🧠</span> Learning
                 </button>
+                <button class="nav-item" onclick="showModule('templates')">
+                    <span class="icon">📋</span> Templates
+                </button>
+                <button class="nav-item" onclick="showModule('habits')">
+                    <span class="icon">🎯</span> Habits
+                </button>
+                <button class="nav-item" onclick="showModule('analytics')">
+                    <span class="icon">📊</span> Analytics
+                </button>
             </nav>
+
 
             <!-- FOOTER (User Profile) -->
             <div class="sidebar-footer">
@@ -137,6 +168,10 @@
                         <div id="systemTime" class="sys-time"></div>
                     </div>
                     <button class="btn btn-outline" id="themeToggleBtn" onclick="UI.toggleTheme()">🌙</button>
+                    <button class="btn btn-outline btn-sm" onclick="DataExport.exportAll()" title="Export Data">📤
+                        Export</button>
+                    <button class="btn btn-outline btn-sm" onclick="CalendarExport.generateICal(App.state.tasks)"
+                        title="Export Calendar">📅 iCal</button>
                     <button class="btn btn-primary btn-sm" onclick="openAddTaskModal()">+ Quick Task</button>
                 </div>
             </header>
@@ -200,6 +235,14 @@
                 <!-- TASKS MODULE -->
                 <div id="tasksModule" class="module">
                     <div class="module-header">
+                        <div class="search-container" style="margin-bottom: var(--space-md);">
+                            <input type="text" id="taskSearchInput" class="search-input"
+                                placeholder="🔍 Search tasks..." oninput="App.handleTaskSearch(this.value)"
+                                aria-label="Search tasks">
+                            <button class="btn-icon"
+                                onclick="document.getElementById('taskSearchInput').value=''; App.handleTaskSearch('');"
+                                title="Clear search" style="display:none;" id="clearSearchBtn">✕</button>
+                        </div>
                         <div class="filters">
                             <button class="filter-tag active" onclick="filterTasks('all')">All</button>
                             <button class="filter-tag" onclick="filterTasks('today')">Today</button>
@@ -209,6 +252,238 @@
                     </div>
                     <div class="task-list" id="fullTaskList">
                         <!-- Generated by JS -->
+                    </div>
+                </div>
+
+                <!-- CONTENT HUB MODULE (YouTube Content Command Center) -->
+                <div id="contentModule" class="module">
+                    <div class="module-header">
+                        <h2>🎬 Content Hub</h2>
+                        <div class="content-actions">
+                            <button class="btn btn-primary btn-sm" onclick="App.openVideoModal()">+ New Video</button>
+                        </div>
+                    </div>
+
+                    <!-- Content Pipeline Overview -->
+                    <div class="content-pipeline" id="contentPipeline">
+                        <div class="pipeline-stage" data-stage="research">
+                            <div class="stage-header">
+                                <span class="stage-icon">🔍</span>
+                                <span class="stage-name">Research</span>
+                                <span class="stage-count" id="researchCount">0</span>
+                            </div>
+                        </div>
+                        <div class="pipeline-stage" data-stage="scripting">
+                            <div class="stage-header">
+                                <span class="stage-icon">📝</span>
+                                <span class="stage-name">Scripting</span>
+                                <span class="stage-count" id="scriptingCount">0</span>
+                            </div>
+                        </div>
+                        <div class="pipeline-stage" data-stage="recording">
+                            <div class="stage-header">
+                                <span class="stage-icon">🎙️</span>
+                                <span class="stage-name">Recording</span>
+                                <span class="stage-count" id="recordingCount">0</span>
+                            </div>
+                        </div>
+                        <div class="pipeline-stage" data-stage="editing">
+                            <div class="stage-header">
+                                <span class="stage-icon">✂️</span>
+                                <span class="stage-name">Editing</span>
+                                <span class="stage-count" id="editingCount">0</span>
+                            </div>
+                        </div>
+                        <div class="pipeline-stage" data-stage="review">
+                            <div class="stage-header">
+                                <span class="stage-icon">👀</span>
+                                <span class="stage-name">Review</span>
+                                <span class="stage-count" id="reviewCount">0</span>
+                            </div>
+                        </div>
+                        <div class="pipeline-stage" data-stage="scheduled">
+                            <div class="stage-header">
+                                <span class="stage-icon">📅</span>
+                                <span class="stage-name">Scheduled</span>
+                                <span class="stage-count" id="scheduledCount">0</span>
+                            </div>
+                        </div>
+                        <div class="pipeline-stage" data-stage="published">
+                            <div class="stage-header">
+                                <span class="stage-icon">✅</span>
+                                <span class="stage-name">Published</span>
+                                <span class="stage-count" id="publishedCount">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Content Filters -->
+                    <div class="content-filters">
+                        <div class="filters">
+                            <button class="filter-tag active" onclick="App.filterContent('all')">All</button>
+                            <button class="filter-tag" onclick="App.filterContent('research')">Research</button>
+                            <button class="filter-tag" onclick="App.filterContent('scripting')">Scripting</button>
+                            <button class="filter-tag" onclick="App.filterContent('recording')">Recording</button>
+                            <button class="filter-tag" onclick="App.filterContent('editing')">Editing</button>
+                            <button class="filter-tag" onclick="App.filterContent('review')">Review</button>
+                            <button class="filter-tag" onclick="App.filterContent('scheduled')">Scheduled</button>
+                            <button class="filter-tag" onclick="App.filterContent('published')">Published</button>
+                        </div>
+                    </div>
+
+                    <!-- Content List -->
+                    <div class="content-list" id="contentList">
+                        <div class="empty-state">
+                            <h3>🎬 No Videos Yet</h3>
+                            <p>Start creating content for your YouTube channels.</p>
+                            <button class="btn btn-primary" onclick="App.openVideoModal()">+ Create First Video</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- PROMPTS MODULE (AI Prompt Library) -->
+                <div id="promptsModule" class="module">
+                    <div class="module-header">
+                        <h2>✨ Prompt Library</h2>
+                        <div class="prompt-actions">
+                            <button class="btn btn-primary btn-sm" onclick="App.openPromptModal()">+ New Prompt</button>
+                        </div>
+                    </div>
+
+                    <!-- Prompt Stats -->
+                    <div class="prompt-stats" id="promptStats">
+                        <div class="stat-card mini">
+                            <span class="stat-label">Total Prompts</span>
+                            <span class="stat-value" id="totalPromptsCount">0</span>
+                        </div>
+                        <div class="stat-card mini">
+                            <span class="stat-label">Generations</span>
+                            <span class="stat-value" id="totalGenerations">0</span>
+                        </div>
+                        <div class="stat-card mini">
+                            <span class="stat-label">Tokens Used</span>
+                            <span class="stat-value" id="totalTokensUsed">0</span>
+                        </div>
+                        <div class="stat-card mini">
+                            <span class="stat-label">Est. Cost</span>
+                            <span class="stat-value" id="totalCost">$0.00</span>
+                        </div>
+                    </div>
+
+                    <!-- Prompt Categories -->
+                    <div class="prompt-categories">
+                        <div class="filters">
+                            <button class="filter-tag active" onclick="App.filterPrompts('all')">All</button>
+                            <button class="filter-tag" onclick="App.filterPrompts('favorites')">⭐ Favorites</button>
+                            <button class="filter-tag" onclick="App.filterPrompts('title')">📺 Titles</button>
+                            <button class="filter-tag" onclick="App.filterPrompts('description')">📝
+                                Descriptions</button>
+                            <button class="filter-tag" onclick="App.filterPrompts('script')">🎬 Scripts</button>
+                            <button class="filter-tag" onclick="App.filterPrompts('thumbnail')">🖼️ Thumbnails</button>
+                            <button class="filter-tag" onclick="App.filterPrompts('image')">🎨 Images</button>
+                            <button class="filter-tag" onclick="App.filterPrompts('video')">🎥 B-Roll</button>
+                        </div>
+                    </div>
+
+                    <!-- Prompt Library Grid -->
+                    <div class="prompt-grid" id="promptList">
+                        <div class="empty-state">
+                            <h3>✨ No Prompts Yet</h3>
+                            <p>Create your first AI prompt template with variables.</p>
+                            <button class="btn btn-primary" onclick="App.openPromptModal()">+ Create First
+                                Prompt</button>
+                        </div>
+                    </div>
+
+                    <!-- Prompt History -->
+                    <div class="prompt-history-section">
+                        <div class="section-header">
+                            <h3>📜 Recent Generations</h3>
+                            <button class="btn btn-sm" onclick="App.viewPromptHistory()">View All</button>
+                        </div>
+                        <div class="prompt-history-list" id="promptHistoryList">
+                            <div class="empty-state small">
+                                <p>No generation history yet.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MEDIA STUDIO MODULE -->
+                <div id="mediaModule" class="module">
+                    <div class="module-header">
+                        <h2>🎨 Media Studio</h2>
+                        <div class="media-actions">
+                            <div class="media-stats-mini">
+                                <span id="mediaCount">0 Assets</span> • <span id="mediaCredits">Mock Mode</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="media-workbench-layout">
+                        <!-- Left: Generator Controls -->
+                        <div class="media-controls-panel">
+                            <div class="panel-header">
+                                <h3>Create New</h3>
+                                <div class="toggle-switch">
+                                    <button class="toggle-btn active" onclick="App.setMediaType('image')"
+                                        id="btnTypeImage">Image</button>
+                                    <button class="toggle-btn" onclick="App.setMediaType('video')"
+                                        id="btnTypeVideo">Video</button>
+                                </div>
+                            </div>
+
+                            <div class="generator-form">
+                                <div class="form-group">
+                                    <label>Prompt</label>
+                                    <textarea id="mediaPromptInput" class="prompt-input" rows="4"
+                                        placeholder="Describe your image or video idea..."></textarea>
+                                </div>
+
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Aspect Ratio</label>
+                                        <select id="mediaAspectRatio">
+                                            <option value="16:9">16:9 (Landscape)</option>
+                                            <option value="9:16">9:16 (Portrait/Shorts)</option>
+                                            <option value="1:1">1:1 (Square)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Style</label>
+                                        <select id="mediaStyle">
+                                            <option value="photorealistic">Photorealistic</option>
+                                            <option value="cinematic">Cinematic</option>
+                                            <option value="anime">Anime/Art</option>
+                                            <option value="digital-art">3D Render</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <button class="btn btn-primary btn-block btn-lg" onclick="App.generateMedia()">
+                                    ✨ Generate <span class="cost-badge" id="generationCost">Free</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Right: Gallery -->
+                        <div class="media-gallery-panel">
+                            <div class="gallery-header">
+                                <div class="gallery-tabs">
+                                    <button class="tab-btn active" onclick="App.filterMedia('all')">All</button>
+                                    <button class="tab-btn" onclick="App.filterMedia('image')">Images</button>
+                                    <button class="tab-btn" onclick="App.filterMedia('video')">Videos</button>
+                                    <button class="tab-btn" onclick="App.filterMedia('favorites')">⭐ Favorites</button>
+                                </div>
+                            </div>
+                            <div class="media-grid-scroll" id="mediaList">
+                                <!-- JS Generated Content -->
+                                <div class="empty-state">
+                                    <h3>No Media Yet</h3>
+                                    <p>Use the generator to create your first asset.</p>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -243,6 +518,39 @@
                             Path</button>
                     </div>
                     <div class="learning-list" id="learningList">
+                        <!-- Generated by JS -->
+                    </div>
+                </div>
+
+                <!-- TEMPLATES MODULE -->
+                <div id="templatesModule" class="module">
+                    <div class="module-header">
+                        <h2>📋 Task Templates</h2>
+                        <button class="btn btn-primary btn-sm" onclick="App.openTemplateModal()">+ New Template</button>
+                    </div>
+                    <div class="templates-grid" id="templatesList">
+                        <!-- Generated by JS -->
+                    </div>
+                </div>
+
+                <!-- HABITS MODULE -->
+                <div id="habitsModule" class="module">
+                    <div class="module-header">
+                        <h2>🎯 Habit Tracker</h2>
+                        <button class="btn btn-primary btn-sm" onclick="App.openHabitModal()">+ New Habit</button>
+                    </div>
+                    <div class="habits-grid" id="habitsList">
+                        <!-- Generated by JS -->
+                    </div>
+                </div>
+
+                <!-- ANALYTICS MODULE -->
+                <div id="analyticsModule" class="module">
+                    <div class="module-header">
+                        <h2>📊 Advanced Analytics</h2>
+                        <button class="btn btn-outline btn-sm" onclick="DataExport.exportCSV()">Export CSV</button>
+                    </div>
+                    <div class="analytics-content" id="analyticsContent">
                         <!-- Generated by JS -->
                     </div>
                 </div>

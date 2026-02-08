@@ -9,15 +9,17 @@
 ## 2. Code Logic Analysis (`script.js`)
 
 ### A. The "Focus Mode" Loop
-**Function**: `detectActiveTask()` (Lines 663-678)
-**Triggers**: Runs every 60 seconds (`setInterval`).
+**Function**: `Schedule.detectActiveTask()` (Implemented)
+**Triggers**: Runs every 30 seconds (`setInterval` in `App.startFocusDetection()`).
 **Logic**:
-1.  Gets current system time (HH:MM).
-2.  Scans `currentTasks` array.
-3.  Finds a task where `currentTime >= task.start` AND `currentTime <= task.end`.
-4.  If found, calls `setActiveTask(task)` which:
-    *   Switches the UI to show the **Focus Card** (Line 706).
-    *   Starts a countdown timer (`startFocusTimer`) showing time remaining for that block.
+1.  Gets current system time (HH:MM) via `Schedule.getCurrentTime()`.
+2.  Scans tasks array for tasks with `timeBlock` property.
+3.  Finds a task where `currentTime >= task.timeBlock.start` AND `currentTime < task.timeBlock.end`.
+4.  If found, `UI.renderFocusMode()` displays:
+    *   **Focus Card** with task details, category, and time range.
+    *   **Countdown Timer** (`UI.startFocusTimer()`) showing time remaining (updates every second).
+    *   **Action Buttons**: Complete Task, Skip.
+5.  Timer changes color to orange when <5 minutes remaining, red when expired.
 
 ### B. Kanban Board Rendering
 **Function**: `renderTaskList()`
