@@ -160,6 +160,7 @@
         <main class="main-content">
             <!-- HEADER -->
             <header class="top-bar">
+                <button class="menu-btn mobile-menu-btn" onclick="UI.toggleSidebar()">☰</button>
                 <div class="page-title" id="pageTitle">Dashboard</div>
                 <div class="top-actions">
                     <div class="datetime-display">
@@ -168,6 +169,11 @@
                         <div id="systemTime" class="sys-time"></div>
                     </div>
                     <button class="btn btn-outline" id="themeToggleBtn" onclick="UI.toggleTheme()">🌙</button>
+                    <input type="file" id="importFileInput" style="display: none;" accept=".json"
+                        onchange="DataExport.import(this.files[0])">
+                    <button class="btn btn-outline btn-sm" onclick="document.getElementById('importFileInput').click()"
+                        title="Import Data">📥
+                        Import</button>
                     <button class="btn btn-outline btn-sm" onclick="DataExport.exportAll()" title="Export Data">📤
                         Export</button>
                     <button class="btn btn-outline btn-sm" onclick="CalendarExport.generateICal(App.state.tasks)"
@@ -243,7 +249,7 @@
                                 onclick="document.getElementById('taskSearchInput').value=''; App.handleTaskSearch('');"
                                 title="Clear search" style="display:none;" id="clearSearchBtn">✕</button>
                         </div>
-                        <div class="filters">
+                        <div class="filters" id="taskFilters">
                             <button class="filter-tag active" onclick="filterTasks('all')">All</button>
                             <button class="filter-tag" onclick="filterTasks('today')">Today</button>
                             <button class="filter-tag" onclick="filterTasks('upcoming')">Upcoming</button>
@@ -489,8 +495,12 @@
 
                 <!-- SCHEDULE MODULE -->
                 <div id="scheduleModule" class="module">
-                    <h2>Schedule View (Coming Soon)</h2>
-                    <p>Timeline visualization under construction.</p>
+                    <div class="module-header">
+                        <h2>📅 Daily Schedule</h2>
+                    </div>
+                    <div class="schedule-timeline">
+                        <div class="skeleton-loader" style="height: 300px;"></div>
+                    </div>
                 </div>
 
                 <!-- GOALS MODULE -->
@@ -506,8 +516,13 @@
 
                 <!-- PROJECTS MODULE -->
                 <div id="projectsModule" class="module">
-                    <h2>Projects View (Coming Soon)</h2>
-                    <p>Project management hub under construction.</p>
+                    <div class="module-header">
+                        <h2>🚀 Projects Hub</h2>
+                        <button class="btn btn-primary btn-sm" onclick="App.openProjectModal()">+ New Project</button>
+                    </div>
+                    <div class="projects-grid" id="projectsList">
+                        <div class="skeleton-loader" style="height: 200px;"></div>
+                    </div>
                 </div>
 
                 <!-- LEARNING MODULE -->

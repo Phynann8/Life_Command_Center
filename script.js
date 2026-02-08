@@ -1821,68 +1821,66 @@ const Data = Config.offlineMode ? MockData : SupabaseData;
 // RECURRENCE MANAGER
 // -----------------------------
 const RecurrenceManager = {
-    scheduleNext: async (task, recurrence) => {
-        const nextDate = RecurrenceManager.getNextDate(recurrence);
+    // Called when a recurring task is completed
+    handleTaskCompletion: async (task) => {
+        if (!task.recurrence || task.recurrence === 'none') return;
+        if (task.nextOccurrenceCreated) return;
+
+        const nextDate = RecurrenceManager.calculateNextDate(task.dueDate || new Date(), task.recurrence);
         if (!nextDate) return;
 
         const nextTask = {
-            ...task,
-            timeBlock: task.timeBlock ? {
-                start: task.timeBlock.start,
-                end: task.timeBlock.end
-            } : undefined,
-            dueDate: nextDate.toISOString().split('T')[0],
+            title: task.title,
+            description: task.description,
+            category: task.category,
+            priority: task.priority,
+            status: 'todo',
             recurrence: task.recurrence,
-            parentTaskId: task.id // Track original task
+            tags: task.tags,
+            dueDate: nextDate,
+            timeBlock: task.timeBlock,
+            parentTaskId: task.id
         };
 
-        // Schedule for next occurrence
-        setTimeout(async () => {
-            try {
-                await Data.Tasks.add(App.state.user.uid, nextTask);
-            } catch (error) {
-                ErrorHandler.handle(error, 'RecurrenceManager.scheduleNext');
-            }
-        }, 1000);
+        try {
+            await Data.Tasks.add(App.state.user.uid, nextTask);
+            await Data.Tasks.update(task.id, { nextOccurrenceCreated: true });
+            UI.showToast(`Next occurrence created due ${nextDate}`, 'success');
+        } catch (error) {
+            console.error('Failed to create recurring task', error);
+            ErrorHandler.handle(error, 'RecurrenceManager.handleTaskCompletion');
+        }
     },
 
-    getNextDate: (recurrence) => {
-        const now = new Date();
-        const next = new Date(now);
+    calculateNextDate: (baseDate, recurrence) => {
+        const d = new Date(baseDate);
+        if (isNaN(d.getTime())) return new Date().toISOString().split('T')[0];
 
         switch (recurrence) {
-            case 'daily':
-                next.setDate(next.getDate() + 1);
-                break;
-            case 'weekly':
-                next.setDate(next.getDate() + 7);
-                break;
-            case 'monthly':
-                next.setMonth(next.getMonth() + 1);
-                break;
-            default:
-                return null;
+            case 'daily': d.setDate(d.getDate() + 1); break;
+            case 'weekly': d.setDate(d.getDate() + 7); break;
+            case 'monthly': d.setMonth(d.getMonth() + 1); break;
         }
-
-        return next;
+        return d.toISOString().split('T')[0];
     },
 
+    scheduleNext: async (task, recurrence) => {
+        // Deprecated: Recurrence is now handled on completion
+    },
+
+    // Alias for compatibility
+    getNextDate: (recurrence) => RecurrenceManager.calculateNextDate(new Date(), recurrence),
+
     checkAndCreateRecurring: async (tasks) => {
-        // Check completed tasks with recurrence
-        const recurringTasks = tasks.filter(t =>
+        const pending = tasks.filter(t =>
             t.status === 'completed' &&
             t.recurrence &&
             t.recurrence !== 'none' &&
             !t.nextOccurrenceCreated
         );
 
-        for (const task of recurringTasks) {
-            const nextDate = RecurrenceManager.getNextDate(task.recurrence);
-            if (nextDate && nextDate <= new Date()) {
-                await RecurrenceManager.scheduleNext(task, task.recurrence);
-                // Mark as processed
-                await Data.Tasks.update(task.id, { nextOccurrenceCreated: true });
-            }
+        for (const task of pending) {
+            await RecurrenceManager.handleTaskCompletion(task);
         }
     },
 
@@ -1915,7 +1913,6 @@ const RecurrenceManager = {
         }
 
         longestStreak = Math.max(longestStreak, tempStreak);
-
         return { current: currentStreak, longest: longestStreak };
     }
 };
@@ -1994,6 +1991,7 @@ const Pomodoro = {
                 ? Constants.POMODORO_LONG_BREAK
                 : Constants.POMODORO_SHORT_BREAK;
             UI.showToast('🍅 Pomodoro complete! Time for a break.', 'success');
+            Pomodoro.playSound();
 
             // Browser notification
             if (Notification.permission === 'granted') {
@@ -2017,33 +2015,57 @@ const Pomodoro = {
         const seconds = Math.floor((Pomodoro.state.timeLeft % 60000) / 1000);
         const display = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-        let pomodoroEl = document.getElementById('pomodoroDisplay');
-        if (!pomodoroEl) {
-            // Create pomodoro display if it doesn't exist
-            const focusCard = document.querySelector('.focus-card');
-            if (focusCard) {
-                pomodoroEl = document.createElement('div');
-                pomodoroEl.id = 'pomodoroDisplay';
-                pomodoroEl.className = 'pomodoro-display';
-                focusCard.querySelector('.focus-content').appendChild(pomodoroEl);
+        // Target the container inside focus mode
+        let container = document.getElementById('pomodoroContainer');
+
+        // If container doesn't exist (e.g. no active task), try to create/find it or fallback
+        if (!container) {
+            const focusCard = document.querySelector('.focus-card .focus-content');
+            if (focusCard && !focusCard.querySelector('.empty-state')) {
+                // Only append if we have content and it's not empty state
+                // But wait, if renderFocusMode runs, it creates #pomodoroContainer if active task.
+                // If NO active task, we might want to allow Pomodoro anyway? 
+                // Current logic: renderFocusMode handles it. 
+                return;
             }
         }
 
-        if (pomodoroEl) {
-            pomodoroEl.innerHTML = `
-                <div class="pomodoro-controls">
-                    <button class="btn btn-sm ${Pomodoro.state.isRunning ? 'btn-outline' : 'btn-primary'}" 
-                        onclick="Pomodoro.start()">
-                        ${Pomodoro.state.isRunning ? '⏸️ Pause' : '▶️ Start'}
-                    </button>
-                    <button class="btn btn-sm btn-outline" onclick="Pomodoro.reset()">🔄 Reset</button>
-                </div>
-                <div class="pomodoro-timer">${display}</div>
-                <div class="pomodoro-info">
-                    ${Pomodoro.state.isBreak ? '☕ Break Time' : '🍅 Work Session'} | 
-                    Sessions: ${Pomodoro.state.sessionCount}
+        if (container) {
+            container.innerHTML = `
+                <div class="pomodoro-display">
+                    <div class="pomodoro-controls">
+                        <button class="btn btn-sm ${Pomodoro.state.isRunning ? 'btn-outline' : 'btn-primary'}" 
+                            onclick="Pomodoro.start(App.state.activeTaskId)">
+                            ${Pomodoro.state.isRunning ? '⏸️ Pause' : '▶️ Start Focus'}
+                        </button>
+                        <button class="btn btn-sm btn-outline" onclick="Pomodoro.reset()">🔄 Reset</button>
+                    </div>
+                    <div class="pomodoro-timer">${display}</div>
+                    <div class="pomodoro-info">
+                        ${Pomodoro.state.isBreak ? '☕ Break Time' : '🍅 Work Session'} | 
+                        Sessions: ${Pomodoro.state.sessionCount}
+                    </div>
                 </div>
             `;
+        } else {
+            // Update title if running but no UI?
+            if (Pomodoro.state.isRunning) {
+                document.title = `${display} - Focus`;
+            } else {
+                document.title = 'Life Command Center';
+            }
+        }
+    },
+
+    playSound: () => {
+        // Simple beep using AudioContext or data URI
+        const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU'); // Placeholder short beep
+        // Better: standard notification sound hosted or synthesized.
+        // For now, let's assume browser notification is primary.
+        // Or use a synthesis
+        if ('speechSynthesis' in window) {
+            const msg = new SpeechSynthesisUtterance(Pomodoro.state.isBreak ? "Take a break" : "Back to work");
+            window.speechSynthesis.speak(msg);
         }
     }
 };
@@ -2077,6 +2099,28 @@ const TimeTracker = {
         const hours = Math.floor(ms / 3600000);
         const minutes = Math.floor((ms % 3600000) / 60000);
         return `${hours}h ${minutes}m`;
+    }
+};
+
+// -----------------------------
+// TAG MANAGER
+// -----------------------------
+const TagManager = {
+    getTags: (tasks) => {
+        const tagCounts = {};
+        tasks.forEach(task => {
+            if (task.tags && Array.isArray(task.tags)) {
+                task.tags.forEach(tag => {
+                    const normalized = tag.trim().toLowerCase();
+                    if (normalized) {
+                        tagCounts[normalized] = (tagCounts[normalized] || 0) + 1;
+                    }
+                });
+            }
+        });
+        return Object.entries(tagCounts)
+            .map(([name, count]) => ({ name, count }))
+            .sort((a, b) => b.count - a.count);
     }
 };
 
@@ -2369,6 +2413,46 @@ const UI = {
         if (loadingState) loadingState.remove();
     },
 
+    toggleSidebar: () => {
+        const sidebar = document.querySelector('.sidebar');
+        let overlay = document.querySelector('.sidebar-overlay');
+
+        if (!overlay) {
+            overlay = UI.createSidebarOverlay();
+        }
+
+        sidebar.classList.toggle('active');
+        overlay.classList.toggle('active');
+    },
+
+    createSidebarOverlay: () => {
+        const overlay = document.createElement('div');
+        overlay.className = 'sidebar-overlay';
+        overlay.onclick = UI.toggleSidebar;
+        document.body.appendChild(overlay);
+        return overlay;
+    },
+
+    renderEmptyState: (container, options = {}) => {
+        if (!container) return;
+        const {
+            icon = '📂',
+            title = 'No Items Found',
+            message = 'There are no items to display here yet.',
+            actionText = null,
+            actionFn = null
+        } = options;
+
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">${icon}</div>
+                <h3>${title}</h3>
+                <p>${message}</p>
+                ${actionText && actionFn ? `<button class="btn btn-primary" onclick="${actionFn}">${actionText}</button>` : ''}
+            </div>
+        `;
+    },
+
     showModule: (name) => {
         document.querySelectorAll('.module').forEach(m => m.classList.remove('active'));
         const target = document.getElementById(`${name}Module`);
@@ -2384,9 +2468,15 @@ const UI = {
         const titleEl = document.getElementById('pageTitle');
         if (titleEl) titleEl.textContent = title;
 
-        // close mobile menu if open
-        const nav = document.getElementById('sidebarNav');
-        if (nav && nav.classList.contains('active')) nav.classList.remove('active');
+        // Close sidebar on mobile if open
+        const sidebar = document.querySelector('.sidebar');
+        const overlay = document.querySelector('.sidebar-overlay');
+        if (sidebar && sidebar.classList.contains('active')) {
+            sidebar.classList.remove('active');
+        }
+        if (overlay && overlay.classList.contains('active')) {
+            overlay.classList.remove('active');
+        }
     },
 
     showModal: (html) => {
@@ -2466,12 +2556,26 @@ const UI = {
             return;
         }
 
-        listEl.innerHTML = learnings.map(l => `
-             <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
-                 <h3>📚 ${l.title}</h3>
-                 <button class="btn-icon" onclick="App.deleteLearning('${l.id}')">🗑️</button>
-             </div>
-         `).join('');
+        listEl.innerHTML = learnings.map(l => {
+            const topicsCount = l.topics ? l.topics.length : 0;
+            const completedTopics = l.topics ? l.topics.filter(t => t.completed).length : 0;
+            const progress = topicsCount > 0 ? Math.round((completedTopics / topicsCount) * 100) : 0;
+
+            return `
+                <div class="card learning-card" onclick="App.openLearningDetails('${l.id}')">
+                    <div class="learning-header">
+                        <h3>📚 ${Utils.escapeHtml(l.title)}</h3>
+                        <button class="btn-icon" onclick="event.stopPropagation(); App.deleteLearning('${l.id}')">🗑️</button>
+                    </div>
+                    <div class="learning-progress">
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${progress}%"></div>
+                        </div>
+                        <span class="progress-text">${completedTopics}/${topicsCount} topics (${progress}%)</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
     },
 
     renderTemplatesHub: (templates = []) => {
@@ -2585,12 +2689,22 @@ const UI = {
         const container = document.getElementById('analyticsContent');
         if (!container) return;
 
-        // Calculate statistics
+        // Calculate Statistics
         const totalTasks = tasks.length;
         const completedTasks = tasks.filter(t => t.status === 'completed').length;
         const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
+        // Calculate Productivity Score (0-100)
+        // Factors: Completion Rate (40%), Priority Weights (40%), Time Tracking (20%)
+        const priorityWeights = { high: 3, medium: 2, low: 1 };
+        const totalPossibleWeight = tasks.reduce((sum, t) => sum + (priorityWeights[t.priority] || 2), 0);
+        const completedWeight = tasks.filter(t => t.status === 'completed').reduce((sum, t) => sum + (priorityWeights[t.priority] || 2), 0);
+        const priorityScore = totalPossibleWeight > 0 ? (completedWeight / totalPossibleWeight) * 100 : 0;
+
         const totalTimeTracked = tasks.reduce((sum, t) => sum + (t.trackedTime || 0), 0);
+        const timeScore = totalTasks > 0 ? Math.min(100, (totalTimeTracked / (totalTasks * 15 * 60000)) * 100) : 0; // Avg 15m/task = 100% time score
+
+        const productivityScore = Math.round((completionRate * 0.4) + (priorityScore * 0.4) + (timeScore * 0.2));
         const avgTimePerTask = completedTasks > 0 ? Math.round(totalTimeTracked / completedTasks / 60000) : 0;
 
         // Category breakdown
@@ -2617,24 +2731,36 @@ const UI = {
 
         container.innerHTML = `
             <div class="analytics-grid">
-                <div class="analytics-card">
-                    <h3>📊 Overview</h3>
+                <div class="analytics-card main-stats">
+                    <h3>📊 Productivity Score</h3>
+                    <div class="score-display">
+                        <div class="score-circle">
+                            <span class="score-value">${productivityScore}</span>
+                            <span class="score-label">Points</span>
+                        </div>
+                        <div class="score-meta">
+                            <div class="stat-item">
+                                <span class="stat-label">Completion</span>
+                                <div class="progress-bar"><div class="progress-fill" style="width: ${completionRate}%"></div></div>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Focus Depth</span>
+                                <div class="progress-bar"><div class="progress-fill" style="width: ${timeScore}%"></div></div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="stat-row">
                         <div class="stat-item">
                             <span class="stat-label">Total Tasks</span>
                             <span class="stat-value">${totalTasks}</span>
                         </div>
                         <div class="stat-item">
-                            <span class="stat-label">Completion Rate</span>
-                            <span class="stat-value">${completionRate}%</span>
+                            <span class="stat-label">Done</span>
+                            <span class="stat-value">${completedTasks}</span>
                         </div>
                         <div class="stat-item">
-                            <span class="stat-label">Time Tracked</span>
+                            <span class="stat-label">Focus Time</span>
                             <span class="stat-value">${TimeTracker.formatTime(totalTimeTracked)}</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">Avg Time/Task</span>
-                            <span class="stat-value">${avgTimePerTask} min</span>
                         </div>
                     </div>
                 </div>
@@ -2673,6 +2799,31 @@ const UI = {
                 </div>
             </div>
         `;
+    },
+
+    renderTagFilters: (tasks = []) => {
+        const container = document.getElementById('taskFilters');
+        if (!container) return;
+
+        const tags = TagManager.getTags(tasks);
+        const activeFilter = App.state.currentFilter || 'all';
+
+        let html = `
+            <button class="filter-tag ${activeFilter === 'all' ? 'active' : ''}" onclick="filterTasks('all')">All</button>
+            <button class="filter-tag ${activeFilter === 'today' ? 'active' : ''}" onclick="filterTasks('today')">Today</button>
+            <button class="filter-tag ${activeFilter === 'upcoming' ? 'active' : ''}" onclick="filterTasks('upcoming')">Upcoming</button>
+            <button class="filter-tag ${activeFilter === 'high' ? 'active' : ''}" onclick="filterTasks('high')">High Priority</button>
+        `;
+
+        if (tags.length > 0) {
+            html += `<div class="filter-separator" style="border-left: 1px solid var(--border-color); margin: 0 8px; height: 20px; display: inline-block; vertical-align: middle;"></div>`;
+            tags.forEach(tag => {
+                const isSelected = activeFilter === 'tag:' + tag.name;
+                html += `<button class="filter-tag ${isSelected ? 'active' : ''}" onclick="filterTasks('tag:${tag.name}')">#${tag.name} (${tag.count})</button>`;
+            });
+        }
+
+        container.innerHTML = html;
     },
 
     renderBarChart: (data) => {
@@ -2766,13 +2917,13 @@ const UI = {
         if (!container) return;
 
         if (projects.length === 0) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <h3>🚀 No Active Projects</h3>
-                    <p>Start a new project to organize your big goals.</p>
-                    <button class="btn btn-primary" onclick="App.openProjectModal()">+ Create Project</button>
-                </div>
-            `;
+            UI.renderEmptyState(container, {
+                icon: '🚀',
+                title: 'No Active Projects',
+                message: 'Start a new project to organize your big goals.',
+                actionText: '+ Create Project',
+                actionFn: 'App.openProjectModal()'
+            });
             return;
         }
 
@@ -2855,6 +3006,7 @@ const UI = {
         if (!focusContainer) return;
 
         const activeTask = Schedule.detectActiveTask(tasks);
+        App.state.activeTaskId = activeTask ? activeTask.id : null;
 
         if (activeTask) {
             const timeRemaining = Schedule.getTimeRemaining(activeTask.timeBlock.end);
@@ -2879,20 +3031,25 @@ const UI = {
                         <button class="btn btn-primary btn-sm" onclick="App.completeFocusTask('${activeTask.id}')">Complete Task</button>
                         <button class="btn btn-outline btn-sm" onclick="App.skipFocusTask()">Skip</button>
                     </div>
+                    <div id="pomodoroContainer"></div>
                 </div>
             `;
+
+            // Initialize Pomodoro UI
+            Pomodoro.updateUI();
 
             // Start countdown timer if not already running
             if (!window.focusTimerInterval) {
                 UI.startFocusTimer(activeTask.timeBlock.end);
             }
         } else {
-            focusContainer.innerHTML = `
-                <div class="empty-state">
-                    <p>No active task right now.</p>
-                    <button class="btn btn-primary btn-sm" onclick="showModule('tasks')">View Tasks</button>
-                </div>
-            `;
+            UI.renderEmptyState(focusContainer, {
+                icon: '☕',
+                title: 'No Active Task',
+                message: 'Select a task to start focusing.',
+                actionText: 'View Tasks',
+                actionFn: "UI.showModule('tasks')"
+            });
             // Clear timer if no active task
             if (window.focusTimerInterval) {
                 clearInterval(window.focusTimerInterval);
@@ -2972,12 +3129,20 @@ const UI = {
         if (filter === 'today') filtered = filtered.filter(t => Utils.isToday(t.createdAt));
         if (filter === 'upcoming') filtered = filtered.filter(t => t.status !== 'completed');
         if (filter === 'high') filtered = filtered.filter(t => t.priority === 'high');
+        if (filter.startsWith('tag:')) {
+            const tagName = filter.split(':')[1];
+            filtered = filtered.filter(t => t.tags && t.tags.includes(tagName));
+        }
 
         if (filtered.length === 0) {
-            const emptyMessage = searchQuery
-                ? `No tasks found matching "${searchQuery}"`
-                : 'No tasks found.';
-            container.innerHTML = `<div class="empty-state">${emptyMessage}</div>`;
+            const isSearch = searchQuery && searchQuery.trim().length > 0;
+            UI.renderEmptyState(container, {
+                icon: isSearch ? '🔍' : '📝',
+                title: isSearch ? 'No Search Results' : 'No Tasks Found',
+                message: isSearch ? `No tasks found matching "${searchQuery}"` : 'You are all caught up!',
+                actionText: isSearch ? 'Clear Search' : '+ New Task',
+                actionFn: isSearch ? "App.state.searchQuery = ''; UI.renderTaskList(App.state.tasks);" : "App.openAddTaskModal()"
+            });
             return;
         }
 
@@ -3122,6 +3287,14 @@ const Kanban = {
 
             try {
                 await Data.Tasks.update(taskId, { status: newStatus });
+
+                // Handle recurrence if completing
+                if (newStatus === 'completed') {
+                    if (task) {
+                        await RecurrenceManager.handleTaskCompletion(task);
+                    }
+                }
+
                 UI.showToast('Task moved', 'success');
             } catch (error) {
                 // Rollback on error
@@ -3179,7 +3352,11 @@ const App = {
                 document.getElementById('userAvatar').textContent = (user.displayName || user.email || 'U')[0].toUpperCase();
 
                 // Theme init
-                const savedTheme = localStorage.getItem('theme') || 'dark';
+                let savedTheme = localStorage.getItem('theme');
+                if (!savedTheme) {
+                    savedTheme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+                }
+
                 if (savedTheme === 'light') document.documentElement.setAttribute('data-theme', 'light');
                 else document.documentElement.removeAttribute('data-theme');
                 UI.updateThemeIcon(savedTheme);
@@ -3278,6 +3455,13 @@ const App = {
     completeFocusTask: async (taskId) => {
         try {
             await Data.Tasks.update(taskId, { status: 'completed' });
+
+            // Handle recurrence
+            const task = App.state.tasks.find(t => t.id === taskId);
+            if (task) {
+                await RecurrenceManager.handleTaskCompletion(task);
+            }
+
             UI.showToast('Task completed! 🎉', 'success');
             App.refresh();
         } catch (err) {
@@ -3341,6 +3525,7 @@ const App = {
                     }
                     if (activeModule && activeModule.id === 'analyticsModule') {
                         UI.renderAnalytics(App.state.tasks, App.state.habits);
+                        UI.renderTagFilters(App.state.tasks);
                     }
                 });
 
@@ -3574,7 +3759,11 @@ const App = {
                             <!-- Populated dynamically -->
                         </select>
                     </div>
-                    <div class="modal-footer"><button type="button" class="btn btn-outline btn-cancel" onclick="closeModal()">Cancel</button> <button type="submit" class="btn btn-primary">Save Task</button></div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline" onclick="App.saveCurrentFormAsTemplate()" style="margin-right: auto;">Save as Template</button>
+                        <button type="button" class="btn btn-outline btn-cancel" onclick="closeModal()">Cancel</button> 
+                        <button type="submit" class="btn btn-primary">Save Task</button>
+                    </div>
                 </form>
             </div>
         `);
@@ -3605,6 +3794,38 @@ const App = {
         if (template.timeBlock) {
             document.getElementById('taskStart').value = template.timeBlock.start || '';
             document.getElementById('taskEnd').value = template.timeBlock.end || '';
+        }
+    },
+
+    saveCurrentFormAsTemplate: async () => {
+        const title = document.getElementById('taskTitle').value;
+        if (!title) { UI.showToast('Please enter a title first', 'error'); return; }
+
+        const name = prompt('Enter template name:', title);
+        if (!name) return;
+
+        const template = {
+            name: name,
+            title: title,
+            description: document.getElementById('taskDescription').value,
+            category: document.getElementById('taskCategory').value,
+            priority: document.getElementById('taskPriority').value,
+            tags: document.getElementById('taskTags').value.split(',').map(t => t.trim()).filter(t => t),
+            recurrence: document.getElementById('taskRecurrence').value,
+            timeBlock: {
+                start: document.getElementById('taskStart').value,
+                end: document.getElementById('taskEnd').value
+            }
+        };
+
+        try {
+            await Data.Templates.add(App.state.user.uid, template);
+            UI.showToast('Template saved!', 'success');
+            // Refresh to show in dropdown if needed (though dropdown is static until reopen)
+            App.refresh();
+        } catch (err) {
+            console.error(err);
+            UI.showToast('Failed to save template', 'error');
         }
     },
 
@@ -3689,6 +3910,15 @@ const App = {
         let newStatus = currentStatus === 'in_progress' ? 'completed' : (currentStatus === 'completed' ? 'todo' : 'in_progress');
         try {
             await Data.Tasks.update(id, { status: newStatus });
+
+            // Handle recurrence if completing
+            if (newStatus === 'completed') {
+                const task = App.state.tasks.find(t => t.id === id);
+                if (task) {
+                    await RecurrenceManager.handleTaskCompletion(task);
+                }
+            }
+
             App.refresh();
         } catch (err) {
             console.error('Toggle failed', err);
@@ -3926,8 +4156,116 @@ const App = {
 
     openProjectDetails: (id) => {
         const project = App.state.projects.find(p => p.id === id);
-        if (project) {
-            alert(`Project Details: ${project.title}\n(Full details view coming soon!)`);
+        if (!project) return;
+
+        const projectTasks = App.state.tasks.filter(t => t.projectId === id);
+        const completed = projectTasks.filter(t => t.status === 'completed').length;
+        const total = projectTasks.length;
+        const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+        UI.showModal(`
+            <div class="modal-card project-details">
+                <div class="modal-header">
+                    <h3>${project.icon || '🚀'} ${Utils.escapeHtml(project.title)}</h3>
+                    <button class="btn-close" onclick="closeModal()">×</button>
+                </div>
+                <div class="project-summary">
+                    <p>${Utils.escapeHtml(project.description || 'No description provided.')}</p>
+                    <div class="project-metrics">
+                        <div class="metric">
+                            <span class="label">Progress</span>
+                            <div class="progress-bar"><div class="progress-fill" style="width: ${progress}%"></div></div>
+                            <span class="value">${progress}% (${completed}/${total} tasks)</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="project-tasks-list">
+                    <h4>Tasks</h4>
+                    ${projectTasks.length > 0 ? `
+                        <div class="mini-task-list">
+                            ${projectTasks.map(t => `
+                                <div class="mini-task-item ${t.status}">
+                                    <span class="status-icon">${t.status === 'completed' ? '✅' : '⏳'}</span>
+                                    <span class="title">${Utils.escapeHtml(t.title)}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : '<p class="empty-hint">No tasks linked to this project yet.</p>'}
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-primary btn-sm" onclick="App.openAddTaskModal(); setTimeout(() => document.getElementById('taskParentId').value = '${id}', 50)">+ Add Task</button>
+                    <button class="btn btn-outline btn-sm" onclick="closeModal()">Close</button>
+                </div>
+            </div>
+        `);
+    },
+
+    openLearningDetails: (id) => {
+        const learning = App.state.learnings.find(l => l.id === id);
+        if (!learning) return;
+
+        const topics = learning.topics || [];
+
+        UI.showModal(`
+            <div class="modal-card learning-details">
+                <div class="modal-header">
+                    <h3>📚 ${Utils.escapeHtml(learning.title)}</h3>
+                    <button class="btn-close" onclick="closeModal()">×</button>
+                </div>
+                <div class="topics-section">
+                    <h4>Learning Topics</h4>
+                    <div id="topicsList">
+                        ${topics.length > 0 ? topics.map((t, idx) => `
+                            <div class="topic-item ${t.completed ? 'completed' : ''}">
+                                <input type="checkbox" ${t.completed ? 'checked' : ''} onchange="App.toggleLearningTopic('${id}', ${idx})">
+                                <span>${Utils.escapeHtml(t.title)}</span>
+                            </div>
+                        `).join('') : '<p class="empty-hint">No topics added yet.</p>'}
+                    </div>
+                    <div class="add-topic-form">
+                        <input type="text" id="newTopicTitle" class="form-control" placeholder="Add a topic (e.g. Intro to Hooks)">
+                        <button class="btn btn-primary btn-sm" onclick="App.handleAddTopic('${id}')">Add</button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline btn-sm" onclick="closeModal()">Close</button>
+                </div>
+            </div>
+        `);
+    },
+
+    toggleLearningTopic: async (learningId, topicIdx) => {
+        const learning = App.state.learnings.find(l => l.id === learningId);
+        if (!learning || !learning.topics) return;
+
+        learning.topics[topicIdx].completed = !learning.topics[topicIdx].completed;
+        try {
+            await Data.Learnings.update(learningId, { topics: learning.topics });
+            App.openLearningDetails(learningId); // Re-render modal
+            App.refresh();
+        } catch (err) {
+            ErrorHandler.handle(err, 'App.toggleLearningTopic');
+        }
+    },
+
+    handleAddTopic: async (learningId) => {
+        const titleInput = document.getElementById('newTopicTitle');
+        const title = titleInput.value.trim();
+        if (!title) return;
+
+        const learning = App.state.learnings.find(l => l.id === learningId);
+        if (!learning) return;
+
+        const topics = learning.topics || [];
+        topics.push({ title, completed: false });
+
+        try {
+            await Data.Learnings.update(learningId, { topics });
+            titleInput.value = '';
+            App.openLearningDetails(learningId); // Re-render modal
+            App.refresh();
+        } catch (err) {
+            ErrorHandler.handle(err, 'App.handleAddTopic');
         }
     },
 
@@ -4441,13 +4779,13 @@ const App = {
         if (!listEl) return;
 
         if (filtered.length === 0) {
-            listEl.innerHTML = `
-                <div class="empty-state">
-                    <h3>🎬 No Videos ${filter !== 'all' ? `in "${filter}"` : ''}</h3>
-                    <p>${filter !== 'all' ? 'No videos in this stage yet.' : 'Start creating content for your YouTube channels.'}</p>
-                    <button class="btn btn-primary" onclick="App.openVideoModal()">+ Create Video</button>
-                </div>
-            `;
+            UI.renderEmptyState(listEl, {
+                icon: '🎬',
+                title: `No Videos ${filter !== 'all' ? `in "${filter}"` : ''}`,
+                message: filter !== 'all' ? 'No videos in this stage yet.' : 'Start creating content for your YouTube channels.',
+                actionText: '+ Create Video',
+                actionFn: 'App.openVideoModal()'
+            });
             return;
         }
 
@@ -5284,6 +5622,14 @@ const DataExport = {
     },
 
     import: async (file) => {
+        if (!file) return;
+        if (!confirm('Importing data will merge with your existing data. Continue?')) {
+            // Reset input
+            const input = document.getElementById('importFileInput');
+            if (input) input.value = '';
+            return;
+        }
+
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = async (e) => {
