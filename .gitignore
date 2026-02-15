@@ -34,3 +34,5 @@ filter-system.js
 .firebase/
 .firebaserc
 firebase-debug.log
+
+config.js

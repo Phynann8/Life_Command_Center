@@ -2,15 +2,7 @@
 // CONFIGURATIONS & UTILS
 // ==========================================
 const Config = {
-    firebase: {
-        apiKey: "***REMOVED***",
-        authDomain: "life-command-center.firebaseapp.com",
-        projectId: "life-command-center",
-        storageBucket: "life-command-center.firebasestorage.app",
-        messagingSenderId: "947642257927",
-        appId: "1:947642257927:web:ee8a236024e7ad53ed90a2",
-        measurementId: "G-V1G70237X7"
-    }
+    firebase: window.appConfig.firebase
 };
 
 
